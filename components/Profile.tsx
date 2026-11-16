@@ -27,7 +27,6 @@ import {
   Crown,
   Bell
 } from 'lucide-react';
-import UniversitySelector from './UniversitySelector';
 import SubscriptionCheckoutModal from './SubscriptionCheckoutModal';
 
 interface ProfileProps {
@@ -656,10 +655,12 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
                 )}
                 {isEditing ? (
                   <div className="pt-1 w-full max-w-sm">
-                    <UniversitySelector
+                    <input
+                      type="text"
                       value={editedProfile.university}
-                      onChange={(u) => setEditedProfile({...editedProfile, university: u})}
-                      placeholder="Select or search institution..."
+                      onChange={(e) => setEditedProfile({ ...editedProfile, university: e.target.value })}
+                      placeholder="Enter your university or institution"
+                      className="w-full px-3 py-1.5 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 rounded-lg text-xs outline-none focus:border-[#2563EB]"
                     />
                   </div>
                 ) : (

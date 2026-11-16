@@ -127,6 +127,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   const [newDocSubject, setNewDocSubject] = useState('');
   const [newDocWords, setNewDocWords] = useState(1500);
   const [newDocCitation, setNewDocCitation] = useState<CitationStyle>('APA');
+  const [newDocFormat, setNewDocFormat] = useState<'docx' | 'pdf' | 'pptx' | 'other'>('docx');
+  const [newDocOtherFormat, setNewDocOtherFormat] = useState('');
   const [newDocInstructions, setNewDocInstructions] = useState('');
   const [newDocDepartment, setNewDocDepartment] = useState(profile.department || '');
   const [newDocInstitution, setNewDocInstitution] = useState(profile.university || '');
@@ -303,6 +305,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     setNewDocSubject('');
     setNewDocWords(1500);
     setNewDocCitation('APA');
+    setNewDocFormat('docx');
+    setNewDocOtherFormat('');
     setNewDocInstructions('');
     setNewDocReferences([]);
     setWizardStep(1);
@@ -387,6 +391,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           includeCoverPage: true,
           includeTableOfContents: true,
           includeReferences: true,
+          preferredFormat: newDocFormat,
+          otherFormatLabel: newDocFormat === 'other' ? newDocOtherFormat.trim() || 'Other' : undefined,
         },
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -1662,6 +1668,9 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                   <p className="text-[10px] font-bold text-[#5B6472] uppercase tracking-wider">Brief</p>
                   <p className="text-xs font-semibold text-[#111827] dark:text-white capitalize">
                     {activeDocument.docType.replace('_', ' ')} · {activeDocument.targetWordCount.toLocaleString()} words · {profile?.level || 'undergraduate'} · {activeDocument.citationStyle}
+                    {activeDocument.metadata?.preferredFormat
+                      ? ` · ${activeDocument.metadata.preferredFormat === 'other' ? (activeDocument.metadata.otherFormatLabel || 'Other') : activeDocument.metadata.preferredFormat.toUpperCase()}`
+                      : ''}
                   </p>
                 </div>
 
@@ -2101,6 +2110,46 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                       className="w-full p-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs font-bold outline-none focus:border-blue-600"
                     />
                   </div>
+                </div>
+
+                {/* Preferred Output Format */}
+                <div className="space-y-2">
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider block">
+                    Preferred Output Format *
+                  </label>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                    {[
+                      { id: 'docx', label: 'Word (.docx)' },
+                      { id: 'pdf', label: 'PDF (.pdf)' },
+                      { id: 'pptx', label: 'PowerPoint (.pptx)' },
+                      { id: 'other', label: 'Other' },
+                    ].map((fmt) => {
+                      const active = newDocFormat === fmt.id;
+                      return (
+                        <button
+                          key={fmt.id}
+                          type="button"
+                          onClick={() => setNewDocFormat(fmt.id as 'docx' | 'pdf' | 'pptx' | 'other')}
+                          className={`p-2.5 rounded-lg border text-xs font-semibold transition-colors cursor-pointer min-h-[42px] ${
+                            active
+                              ? 'border-[#2563EB] bg-[#EFF6FF] dark:bg-blue-950/50 text-[#2563EB] dark:text-blue-300'
+                              : 'border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-300 hover:bg-slate-50 dark:hover:bg-slate-700/60'
+                          }`}
+                        >
+                          {fmt.label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                  {newDocFormat === 'other' && (
+                    <input
+                      type="text"
+                      value={newDocOtherFormat}
+                      onChange={(e) => setNewDocOtherFormat(e.target.value)}
+                      placeholder="Specify format (e.g. LaTeX, Google Docs, Plain Text)"
+                      className="w-full p-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg text-xs outline-none focus:border-blue-600"
+                    />
+                  )}
                 </div>
 
                 <div className="flex justify-end pt-3 border-t border-slate-100 dark:border-slate-800">

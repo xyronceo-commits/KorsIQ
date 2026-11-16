@@ -11,7 +11,6 @@ import { UserProfile, Course, Difficulty, SubscriptionTier } from '../types';
 import { DBService } from '../services/db';
 import { getCurrentUserId } from '../lib/supabase';
 import KorsIQLogo from './KorsIQLogo';
-import UniversitySelector from './UniversitySelector';
 import SubscriptionCheckoutModal from './SubscriptionCheckoutModal';
 import { BILLING_ENABLED, PLANS, PLAN_ORDER } from '../lib/plans';
 
@@ -250,11 +249,13 @@ export const Onboarding: React.FC<OnboardingProps> = ({
                 <label className="text-xs font-semibold text-[#111827] dark:text-white">
                   University or institution *
                 </label>
-                <UniversitySelector
-                  value={university}
-                  onChange={(val) => setUniversity(val)}
-                  placeholder="Select or search your institution..."
+                <input
+                  type="text"
                   required
+                  value={university}
+                  onChange={(e) => setUniversity(e.target.value)}
+                  placeholder="e.g. University of Lagos"
+                  className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 rounded-lg text-xs outline-none focus:border-[#2563EB] min-h-[44px]"
                 />
               </div>
 

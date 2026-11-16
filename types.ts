@@ -550,6 +550,8 @@ export interface AcademicDocumentMetadata {
   includeTableOfContents?: boolean;
   includeReferences?: boolean;
   includeAppendices?: boolean;
+  preferredFormat?: 'docx' | 'pdf' | 'pptx' | 'other';
+  otherFormatLabel?: string;
 }
 
 export interface AcademicDocument {
