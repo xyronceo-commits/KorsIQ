@@ -284,7 +284,8 @@ export const GeminiService = {
       }, 'KorsIQ chatbot request failed');
     } catch (err: any) {
       console.warn("KorsIQ chat warning:", err?.message || err);
-      return { text: `[KorsIQ Assistant] I encountered an issue: ${err?.message || 'Connection error'}. Please verify your AI API key is set in hosting environment variables.` };
+      const msg = err?.message || 'Connection error. Please try again.';
+      return { text: `[KorsIQ Assistant] ${msg}` };
     }
   },
 

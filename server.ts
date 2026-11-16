@@ -158,20 +158,28 @@ function safeCompareStrings(a: string, b: string): boolean {
 
 // Gemini models are env-configurable because Google retires them. Override GEMINI_MODEL in hosting env
 // instead of editing code. Later entries are fallbacks tried in order.
-const GEMINI_PRIMARY_MODEL = cleanEnvKey('GEMINI_MODEL') || 'gemini-3.6-flash';
+// Standard tools (summaries, flashcards, quizzes, tests, chat, etc.) use Gemini 3.5 Flash;
+// Academic Studio and AI Podcast use Gemini 3.6 Flash.
+const GEMINI_STANDARD_MODEL = cleanEnvKey('GEMINI_STANDARD_MODEL') || cleanEnvKey('GEMINI_MODEL') || 'gemini-3.5-flash';
+const GEMINI_STUDIO_MODEL = cleanEnvKey('GEMINI_STUDIO_MODEL') || cleanEnvKey('GEMINI_MODEL') || 'gemini-3.6-flash';
 const GEMINI_FALLBACK_MODELS = [
   cleanEnvKey('GEMINI_FALLBACK_MODEL'),
-  'gemini-3.6-flash',
   'gemini-3.5-flash',
+  'gemini-3.6-flash',
   'gemini-3.5-flash-lite',
-  'gemini-3.8-flash'
+  'gemini-3.8-flash',
+  'gemini-2.5-flash'
 ].filter(Boolean) as string[];
-const OCR_MODEL = GEMINI_PRIMARY_MODEL;
-const OCR_MAX_PDF_BYTES = 15 * 1024 * 1024; // keep inline request comfortably under Gemini's size limit
+const OCR_MODEL = GEMINI_STANDARD_MODEL;
+const OCR_INLINE_MAX_BYTES = 15 * 1024 * 1024;
+const OCR_MAX_PDF_BYTES = 25 * 1024 * 1024;
 
 function pickGeminiKey(): string | null {
-  const gemini = cleanEnvKey('GEMINI_API_KEY');
-  if (gemini) return gemini;
+  const direct =
+    cleanEnvKey('GEMINI_API_KEY') ||
+    cleanEnvKey('GOOGLE_API_KEY') ||
+    cleanEnvKey('GOOGLE_GEMINI_API_KEY');
+  if (direct) return direct;
   const scolaris = cleanEnvKey('SCOLARIS_AI_KEY');
   if (scolaris && (scolaris.startsWith('AIzaSy') || !scolaris.startsWith('gsk_'))) return scolaris;
   return null;
@@ -185,24 +193,44 @@ async function ocrMediaWithGemini(buffer: Buffer, mimeType: string, apiKey: stri
   }
   const ai = new GoogleGenAI({ apiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } });
   const candidateModels = Array.from(new Set([OCR_MODEL, ...GEMINI_FALLBACK_MODELS]));
-  const base64Data = buffer.toString('base64');
+  const promptText =
+    'Transcribe all text in this academic document, notes, slides, or transcript exactly as written, in reading order, page by page. ' +
+    'Include course codes, course titles, headings, body text, credit units, scores, grades, bullet points, and handwritten text. Do not summarize, translate, or add commentary. ' +
+    'Where there is a diagram or image with no text, write [diagram]. Output plain text only.';
 
-  for (const model of candidateModels) {
-    try {
-      const response = await ai.models.generateContent({
-        model,
-        contents: [
-          { inlineData: { data: base64Data, mimeType } },
-          'Transcribe all text in this academic document, notes, slides, or transcript exactly as written, in reading order, page by page. ' +
-            'Include course codes, course titles, headings, body text, credit units, scores, grades, bullet points, and handwritten text. Do not summarize, translate, or add commentary. ' +
-            'Where there is a diagram or image with no text, write [diagram]. Output plain text only.'
-        ],
-        config: { temperature: 0 }
+  let uploadedFile: { name?: string; uri?: string; mimeType?: string } | null = null;
+  let mediaPart: any = null;
+
+  try {
+    if (buffer.length > OCR_INLINE_MAX_BYTES) {
+      const uploaded = await ai.files.upload({
+        file: new Blob([new Uint8Array(buffer)], { type: mimeType }),
+        config: { mimeType },
       });
-      const text = normalizeExtractedText(response.text || '');
-      if (text) return text;
-    } catch (err: any) {
-      console.warn(`[OCR] Gemini OCR model ${model} failed (${err?.status || 'ERR'}):`, err?.message || err);
+      uploadedFile = uploaded;
+      mediaPart = { fileData: { fileUri: uploaded.uri, mimeType: uploaded.mimeType || mimeType } };
+    } else {
+      mediaPart = { inlineData: { data: buffer.toString('base64'), mimeType } };
+    }
+
+    for (const model of candidateModels) {
+      try {
+        const response = await ai.models.generateContent({
+          model,
+          contents: [mediaPart, promptText],
+          config: { temperature: 0 }
+        });
+        const text = normalizeExtractedText(response.text || '');
+        if (text) return text;
+      } catch (err: any) {
+        console.warn(`[OCR] Gemini OCR model ${model} failed (${err?.status || 'ERR'}):`, err?.message || err);
+      }
+    }
+  } catch (uploadErr: any) {
+    console.warn('[OCR] Gemini Files API upload warning:', uploadErr?.message || uploadErr);
+  } finally {
+    if (uploadedFile?.name) {
+      ai.files.delete({ name: uploadedFile.name }).catch(() => {});
     }
   }
   return '';
@@ -587,7 +615,13 @@ export async function createExpressApp() {
 
   // Server-side AI provider credentials resolver (strictly Google Gemini)
   const getAIKey = (): string | null => {
-    return cleanEnvKey('GEMINI_API_KEY') || cleanEnvKey('SCOLARIS_AI_KEY') || null;
+    return (
+      cleanEnvKey('GEMINI_API_KEY') ||
+      cleanEnvKey('GOOGLE_API_KEY') ||
+      cleanEnvKey('GOOGLE_GEMINI_API_KEY') ||
+      cleanEnvKey('SCOLARIS_AI_KEY') ||
+      null
+    );
   };
 
   interface AIParams {
@@ -596,9 +630,10 @@ export async function createExpressApp() {
     temperature?: number;
     jsonMode?: boolean;
     preferGroq?: boolean;
+    tier?: 'standard' | 'studio';
   }
 
-  const runAICall = async ({ systemInstruction, messages, temperature, jsonMode }: AIParams): Promise<string> => {
+  const runAICall = async ({ systemInstruction, messages, temperature, jsonMode, tier = 'standard' }: AIParams): Promise<string> => {
     const geminiKey = pickGeminiKey();
 
     if (!geminiKey) {
@@ -636,7 +671,8 @@ export async function createExpressApp() {
       config.responseMimeType = "application/json";
     }
 
-    const geminiCandidateModels = Array.from(new Set([GEMINI_PRIMARY_MODEL, ...GEMINI_FALLBACK_MODELS]));
+    const primaryModel = tier === 'studio' ? GEMINI_STUDIO_MODEL : GEMINI_STANDARD_MODEL;
+    const geminiCandidateModels = Array.from(new Set([primaryModel, ...GEMINI_FALLBACK_MODELS]));
     let lastError: any = null;
 
     for (const model of geminiCandidateModels) {
@@ -2545,7 +2581,8 @@ Dr. Taylor: [spoken text]`;
     return await runAICall({
       systemInstruction,
       messages: [{ role: 'user', content: `Study Material / Revision Content: "${studyMaterial?.slice(0, 8000) || 'General Academic Revision'}"` }],
-      temperature: 0.4
+      temperature: 0.4,
+      tier: 'studio'
     });
   }
 
@@ -3538,7 +3575,8 @@ Output JSON format:
       const aiResponse = await runAICall({
         systemInstruction,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3
+        temperature: 0.3,
+        tier: 'studio'
       });
 
       const cleaned = (aiResponse || '').replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -3668,7 +3706,8 @@ Return your response in clean Markdown formatting ready for direct insertion int
       const aiResponse = await runAICall({
         systemInstruction,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.35
+        temperature: 0.35,
+        tier: 'studio'
       });
 
       return res.json({
@@ -3767,7 +3806,8 @@ Output JSON schema:
       const aiResponse = await runAICall({
         systemInstruction,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.2
+        temperature: 0.2,
+        tier: 'studio'
       });
 
       const cleaned = (aiResponse || '').replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -3824,7 +3864,8 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
       const aiResponse = await runAICall({
         systemInstruction,
         messages: [{ role: 'user', content: prompt }],
-        temperature: 0.3
+        temperature: 0.3,
+        tier: 'studio'
       });
 
       return res.json({ text: (aiResponse || selectedText).trim(), creditsRemaining: spend.balance });
@@ -4544,7 +4585,7 @@ You MUST return a JSON object containing structured study assets with this exact
           }
         };
 
-        const visionCandidateModels = Array.from(new Set([GEMINI_PRIMARY_MODEL, ...GEMINI_FALLBACK_MODELS]));
+        const visionCandidateModels = Array.from(new Set([GEMINI_STANDARD_MODEL, ...GEMINI_FALLBACK_MODELS]));
         let rawText = '';
         let lastVisionErr: any = null;
         for (const model of visionCandidateModels) {
@@ -5087,8 +5128,10 @@ Generate a comprehensive exam simulation with 8 questions from the provided text
     }
 
     // Step 1: Check credit balance first WITHOUT consuming credits yet
-    const balanceInfo = await getAiCreditBalanceForUser(userId);
-    if (balanceInfo.balance < cost) {
+    const balanceInfo = BILLING_ENABLED
+      ? await getAiCreditBalanceForUser(userId)
+      : { balance: 9999, used: 0, allowance: 9999, periodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), periodStart: '' };
+    if (BILLING_ENABLED && balanceInfo.balance < cost) {
       return res.status(402).json({
         error: 'Not enough credits',
         code: 'INSUFFICIENT_CREDITS',
