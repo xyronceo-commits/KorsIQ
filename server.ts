@@ -1,4 +1,5 @@
 import express from 'express';
+import { buildModelChain, resolveHeavyModel, HeavyModelGuard, isPermanentModelError } from './lib/aiModels';
 import cors from 'cors';
 import path from 'path';
 import crypto from 'crypto';
@@ -156,6 +157,11 @@ const GEMINI_FALLBACK_MODELS = [
   'gemini-3.5-flash-lite',
   'gemini-3.8-flash'
 ].filter(Boolean) as string[];
+
+// Heavy tier (Academic Studio, semester outline analysis). The fast tier above handles everything else.
+const GEMINI_HEAVY_MODEL = resolveHeavyModel(cleanEnvKey('GEMINI_HEAVY_MODEL'));
+const GEMINI_HEAVY_TIMEOUT_MS = Math.max(5000, Number(cleanEnvKey('GEMINI_HEAVY_TIMEOUT_MS')) || 35000);
+const heavyModelGuard = new HeavyModelGuard();
 const OCR_MODEL = GEMINI_PRIMARY_MODEL;
 const OCR_MAX_PDF_BYTES = 15 * 1024 * 1024; // keep inline request comfortably under Gemini's size limit
 
@@ -583,9 +589,10 @@ export async function createExpressApp() {
     temperature?: number;
     jsonMode?: boolean;
     preferGroq?: boolean;
+    modelTier?: 'fast' | 'heavy';
   }
 
-  const runAICall = async ({ systemInstruction, messages, temperature, jsonMode }: AIParams): Promise<string> => {
+  const runAICall = async ({ systemInstruction, messages, temperature, jsonMode, modelTier = 'fast' }: AIParams): Promise<string> => {
     const geminiKey = pickGeminiKey();
 
     if (!geminiKey) {
@@ -623,22 +630,38 @@ export async function createExpressApp() {
       config.responseMimeType = "application/json";
     }
 
-    const geminiCandidateModels = Array.from(new Set([GEMINI_PRIMARY_MODEL, ...GEMINI_FALLBACK_MODELS]));
+    const geminiCandidateModels = buildModelChain(
+      modelTier,
+      { fastPrimary: GEMINI_PRIMARY_MODEL, fallbacks: GEMINI_FALLBACK_MODELS, heavyModel: GEMINI_HEAVY_MODEL },
+      heavyModelGuard.isAvailable()
+    );
     let lastError: any = null;
 
     for (const model of geminiCandidateModels) {
+      const isHeavyAttempt = modelTier === 'heavy' && !!GEMINI_HEAVY_MODEL && model === GEMINI_HEAVY_MODEL;
+      // A slow heavy attempt is cut off so the fast model can still answer inside the serverless time limit.
+      const controller = isHeavyAttempt ? new AbortController() : null;
+      const timer = controller ? setTimeout(() => controller.abort(), GEMINI_HEAVY_TIMEOUT_MS) : null;
       try {
         const response = await aiGen.models.generateContent({
           model,
           contents,
-          config
+          config: controller ? { ...config, abortSignal: controller.signal } : config
         });
         if (response.text && response.text.trim().length > 0) {
+          console.info(`[AI] tier=${modelTier} model=${model}`);
           return response.text;
         }
       } catch (gErr: any) {
         console.warn(`Gemini model '${model}' call warning:`, gErr?.message || gErr);
         lastError = gErr;
+        if (isHeavyAttempt && isPermanentModelError(gErr)) {
+          // Not enabled for this key / not found / bad request: stop retrying it for a while.
+          heavyModelGuard.trip();
+          console.warn(`[AI] heavy model '${model}' disabled for 10 minutes; using fast models.`);
+        }
+      } finally {
+        if (timer) clearTimeout(timer);
       }
     }
 
@@ -2965,6 +2988,7 @@ Example:
 }`;
 
       const aiContent = await runAICall({
+        modelTier: 'heavy',
         systemInstruction,
         messages: [{ role: 'user', content: `Extract courses from this syllabus:\n\n${rawText.slice(0, 30000)}` }],
         jsonMode: true
@@ -3334,6 +3358,7 @@ Output JSON format:
 }`;
 
       const aiResponse = await runAICall({
+        modelTier: 'heavy',
         systemInstruction,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3
@@ -3464,6 +3489,7 @@ ${refList || 'No external references uploaded for this section.'}
 Return your response in clean Markdown formatting ready for direct insertion into the academic document.`;
 
       const aiResponse = await runAICall({
+        modelTier: 'heavy',
         systemInstruction,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.35
@@ -3563,6 +3589,7 @@ Output JSON schema:
 }`;
 
       const aiResponse = await runAICall({
+        modelTier: 'heavy',
         systemInstruction,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.2
@@ -3620,6 +3647,7 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
       const prompt = `INSTRUCTION: ${instruction || 'Improve academic flow and vocabulary.'}\n\nSELECTED TEXT:\n"${selectedText}"`;
 
       const aiResponse = await runAICall({
+        modelTier: 'heavy',
         systemInstruction,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3
