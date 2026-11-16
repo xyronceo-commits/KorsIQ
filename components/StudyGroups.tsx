@@ -987,16 +987,27 @@ export const StudyGroups: React.FC<StudyGroupsProps> = ({
                       </button>
 
                       {post.fileUrl && (
-                        <a
-                          href={post.fileUrl}
-                          download={post.fileName || 'document'}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold min-h-[44px] transition-colors shrink-0"
-                        >
-                          <Download size={14} />
-                          <span>Download</span>
-                        </a>
+                        (post as any).scanStatus === 'scanning' ? (
+                          <span className="inline-flex items-center gap-1.5 px-3 py-2 bg-amber-50 dark:bg-amber-950/60 border border-amber-200 dark:border-amber-800 text-amber-700 dark:text-amber-300 rounded-lg text-xs font-semibold min-h-[44px] shrink-0">
+                            <Loader2 size={14} className="animate-spin" />
+                            <span>Scanning...</span>
+                          </span>
+                        ) : (post as any).scanStatus === 'blocked' ? (
+                          <span className="inline-flex items-center gap-1.5 px-3 py-2 bg-red-50 dark:bg-red-950/60 border border-red-200 dark:border-red-800 text-red-700 dark:text-red-300 rounded-lg text-xs font-semibold min-h-[44px] shrink-0">
+                            <span>Blocked</span>
+                          </span>
+                        ) : (
+                          <a
+                            href={post.fileUrl}
+                            download={post.fileName || 'document'}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold min-h-[44px] transition-colors shrink-0"
+                          >
+                            <Download size={14} />
+                            <span>Download</span>
+                          </a>
+                        )
                       )}
                     </div>
                   </div>

@@ -31,6 +31,10 @@ import {
   getPlanDisplayName,
   normalizePlanTier,
 } from './lib/plans';
+import {
+  validateAllowedExtension,
+  scanUploadedBuffer,
+} from './lib/uploadSecurity';
 
 // Load .env for local development (hosting platforms inject real environment variables instead)
 try { process.loadEnvFile(); } catch { /* no .env file: rely on the environment */ }
@@ -1738,7 +1742,21 @@ export async function createExpressApp() {
         return res.status(400).json({ error: 'fileName and contentBase64 parameters are required' });
       }
 
+      const extCheck = validateAllowedExtension(String(fileName));
+      if (extCheck.ok === false) {
+        return res.status(400).json({ error: extCheck.error });
+      }
+
       const buffer = Buffer.from(contentBase64, 'base64');
+      const scanResult = await scanUploadedBuffer({
+        buffer,
+        fileName: String(fileName),
+        virusTotalApiKey: cleanEnvKey('VIRUSTOTAL_API_KEY'),
+      });
+      if (scanResult.scanStatus === 'blocked') {
+        return res.status(400).json({ error: scanResult.detail || 'File failed security verification.' });
+      }
+
       const safeCourseId = typeof courseId === 'string' ? courseId.replace(/[^a-zA-Z0-9_-]/g, '') : '';
       const safeGroupId = typeof groupId === 'string' ? groupId.replace(/[^a-zA-Z0-9_-]/g, '') : '';
       const cleanName = path.basename(String(fileName).replace(/[^a-zA-Z0-9._-]/g, '_'));
@@ -1772,12 +1790,14 @@ export async function createExpressApp() {
       }
 
       const s3 = getS3();
-      const contentType = fileType || 'application/octet-stream';
+      // Ignore browser-claimed fileType; use server-verified canonical MIME type and force attachment disposition
+      const contentType = extCheck.canonicalMimeType;
       const command = new PutObjectCommand({
         Bucket: bucket,
         Key: fileKey,
         Body: buffer,
         ContentType: contentType,
+        ContentDisposition: `attachment; filename="${encodeURIComponent(cleanName)}"`,
       });
 
       await s3.send(command);
@@ -1788,6 +1808,9 @@ export async function createExpressApp() {
         fileName,
         key: fileKey,
         bucket,
+        contentType,
+        scanStatus: scanResult.scanStatus,
+        sha256: scanResult.sha256,
         publicUrl: `${getSupabasePublicObjectBase()}/${bucket}/${fileKey}`
       });
     } catch (error: any) {
@@ -1802,9 +1825,14 @@ export async function createExpressApp() {
       const uid = req.user?.uid;
       if (!uid) return res.status(401).json({ error: 'Authentication required' });
 
-      const { fileName, fileType, courseId, groupId, targetBucket } = req.body;
+      const { fileName, courseId, groupId, targetBucket } = req.body;
       if (!fileName || typeof fileName !== 'string') {
         return res.status(400).json({ error: 'fileName is required' });
+      }
+
+      const extCheck = validateAllowedExtension(fileName);
+      if (extCheck.ok === false) {
+        return res.status(400).json({ error: extCheck.error });
       }
 
       const safeCourseId = typeof courseId === 'string' ? courseId.replace(/[^a-zA-Z0-9_-]/g, '') : '';
@@ -1836,7 +1864,8 @@ export async function createExpressApp() {
       if (quota.ok === false) return res.status(quota.status).json({ error: quota.error });
 
       const s3 = getS3();
-      const contentType = typeof fileType === 'string' && fileType.trim() ? fileType.trim() : 'application/octet-stream';
+      // Ignore browser-claimed fileType; enforce canonical MIME type derived from validated extension
+      const contentType = extCheck.canonicalMimeType;
       const command = new PutObjectCommand({
         Bucket: bucket,
         Key: fileKey,
@@ -1850,6 +1879,7 @@ export async function createExpressApp() {
         fileId,
         key: fileKey,
         bucket,
+        contentType,
         uploadUrl,
         publicUrl: `${getSupabasePublicObjectBase()}/${bucket}/${fileKey}`
       });
@@ -1859,7 +1889,78 @@ export async function createExpressApp() {
     }
   });
 
-  // S3 Presign Download Proxy Route (supports dynamic bucket detection and attachment headers)
+  // Verify & scan an uploaded S3 object (used after direct presigned uploads)
+  app.post('/api/s3/scan', requireAuth, requireS3Configured, apiRateLimiter, async (req: AuthenticatedRequest, res) => {
+    try {
+      const uid = req.user?.uid;
+      const { key, bucket: reqBucket, fileName, materialId, fileId } = req.body;
+      const cleanKey = typeof key === 'string' ? key.trim() : '';
+      if (!cleanKey || cleanKey.includes('..') || cleanKey.includes('\\') || cleanKey.startsWith('/')) {
+        return res.status(400).json({ error: 'Invalid or unsafe storage path.' });
+      }
+
+      const authz = await authorizeStorageObject(uid, cleanKey, reqBucket, 'write');
+      if (!authz.ok) return res.status(authz.status).json({ error: authz.error });
+      const bucket = authz.bucket;
+
+      const dl = await downloadStorageBufferForUser(uid, cleanKey, bucket);
+      if (!dl.buffer) {
+        return res.status(404).json({ success: false, error: dl.error || 'Uploaded file not found in storage.' });
+      }
+
+      const resolvedName = (typeof fileName === 'string' && fileName.trim()) || cleanKey.split('/').pop() || 'upload';
+      const scan = await scanUploadedBuffer({
+        buffer: dl.buffer,
+        fileName: resolvedName,
+        virusTotalApiKey: cleanEnvKey('VIRUSTOTAL_API_KEY'),
+      });
+
+      if (scan.scanStatus === 'blocked') {
+        try {
+          const s3 = getS3();
+          await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: cleanKey }));
+        } catch {}
+      }
+
+      const scanPayload = {
+        scan_status: scan.scanStatus,
+        scan_checked_at: new Date().toISOString(),
+        scan_provider: scan.provider,
+        scan_detail: scan.detail,
+        file_sha256: scan.sha256,
+      };
+
+      if (supabaseAdmin) {
+        if (materialId) {
+          await supabaseAdmin.from('group_materials').update(scanPayload).eq('id', materialId);
+        } else if (bucket === 'group-materials') {
+          await supabaseAdmin.from('group_materials').update(scanPayload).eq('storage_path', cleanKey);
+        }
+        if (fileId) {
+          await supabaseAdmin.from('user_files').update(scanPayload).eq('id', fileId).eq('user_id', uid);
+        } else if (bucket === 'user-files') {
+          await supabaseAdmin.from('user_files').update(scanPayload).eq('storage_path', cleanKey).eq('user_id', uid);
+        }
+      }
+
+      if (scan.scanStatus === 'blocked') {
+        return res.status(400).json({ success: false, scanStatus: 'blocked', error: scan.detail });
+      }
+
+      return res.json({
+        success: true,
+        scanStatus: scan.scanStatus,
+        sha256: scan.sha256,
+        provider: scan.provider,
+        contentType: scan.canonicalMimeType,
+      });
+    } catch (error: any) {
+      console.error('S3 Scan Error:', error);
+      return res.status(500).json({ error: error?.message || 'Failed to scan uploaded file.' });
+    }
+  });
+
+  // S3 Presign Download Proxy Route (supports dynamic bucket detection, scan-gate, and forced attachment download)
   app.post('/api/s3/presign', requireAuth, requireS3Configured, apiRateLimiter, async (req: AuthenticatedRequest, res) => {
     try {
       const { key, bucket: reqBucket, downloadName } = req.body;
@@ -1871,6 +1972,25 @@ export async function createExpressApp() {
       const authz = await authorizeStorageObject(req.user?.uid, cleanKey, reqBucket, 'read');
       if (!authz.ok) return res.status(authz.status).json({ error: authz.error });
       const bucket = authz.bucket;
+
+      // Enforce scan_status gate before issuing download URL
+      if (supabaseAdmin) {
+        const table = bucket === 'group-materials' ? 'group_materials' : bucket === 'user-files' ? 'user_files' : null;
+        if (table) {
+          const { data: fileRow } = await supabaseAdmin
+            .from(table)
+            .select('scan_status')
+            .eq('storage_path', cleanKey)
+            .maybeSingle();
+          if (fileRow?.scan_status === 'scanning') {
+            return res.status(403).json({ error: 'This file is still being scanned. Please wait a moment and try again.' });
+          }
+          if (fileRow?.scan_status === 'blocked') {
+            return res.status(403).json({ error: 'This file was blocked by security scanning and cannot be downloaded.' });
+          }
+        }
+      }
+
       const s3 = getS3();
 
       const filename = typeof downloadName === 'string' && downloadName.trim()
@@ -1880,6 +2000,7 @@ export async function createExpressApp() {
       const command = new GetObjectCommand({
         Bucket: bucket,
         Key: cleanKey,
+        ResponseContentType: 'application/octet-stream',
         ResponseContentDisposition: `attachment; filename="${encodeURIComponent(filename)}"`
       });
 
@@ -4291,7 +4412,46 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
         });
       }
 
-      const result = await extractDocumentWithOcrFallback(buffer, fileName || 'document', fileType || '');
+      const effectiveName = fileName || (storagePath ? path.basename(String(storagePath)) : 'document.txt');
+      const scan = await scanUploadedBuffer({
+        buffer,
+        fileName: effectiveName,
+        virusTotalApiKey: cleanEnvKey('VIRUSTOTAL_API_KEY'),
+      });
+
+      if (supabaseAdmin && storagePath && typeof storagePath === 'string') {
+        const scanPayload = {
+          scan_status: scan.scanStatus,
+          scan_checked_at: new Date().toISOString(),
+          scan_provider: scan.provider,
+          scan_detail: scan.detail,
+          file_sha256: scan.sha256,
+        };
+        if (storagePath.startsWith('groups/')) {
+          await supabaseAdmin.from('group_materials').update(scanPayload).eq('storage_path', storagePath);
+        } else if (userId) {
+          await supabaseAdmin.from('user_files').update(scanPayload).eq('storage_path', storagePath).eq('user_id', userId);
+        }
+      }
+
+      if (scan.scanStatus === 'blocked') {
+        if (storagePath && typeof storagePath === 'string' && isS3Configured()) {
+          try {
+            const targetBucket = bucket || (storagePath.startsWith('groups/') ? 'group-materials' : 'user-files');
+            const s3 = getS3();
+            await s3.send(new DeleteObjectCommand({ Bucket: targetBucket, Key: storagePath }));
+          } catch {}
+        }
+        await markUserFileStatus('failed');
+        return res.status(400).json({
+          success: false,
+          scanStatus: 'blocked',
+          error: scan.detail || 'File failed security verification.',
+          fileName
+        });
+      }
+
+      const result = await extractDocumentWithOcrFallback(buffer, fileName || 'document', scan.canonicalMimeType || fileType || '');
 
       if (!result.success) {
         console.error('[Extract Error] Extraction/OCR failed for', fileName, ':', result.error);
@@ -4354,6 +4514,34 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
     return false;
   };
 
+  const assertSafePublicUrl = async (targetUrl: URL): Promise<{ ok: true } | { ok: false; error: string }> => {
+    if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
+      return { ok: false, error: 'Only http:// and https:// links are supported.' };
+    }
+    const hostname = targetUrl.hostname.toLowerCase();
+    if (
+      hostname === 'localhost' ||
+      hostname.endsWith('.localhost') ||
+      hostname.endsWith('.local') ||
+      hostname.endsWith('.internal') ||
+      isPrivateOrReservedIp(hostname)
+    ) {
+      return { ok: false, error: 'Private or local network URLs are not allowed.' };
+    }
+
+    try {
+      const dns = await import('dns');
+      const records = await dns.promises.lookup(hostname, { all: true });
+      if (!records || records.length === 0 || records.some(r => isPrivateOrReservedIp(r.address))) {
+        return { ok: false, error: 'That URL resolves to a restricted network address and cannot be fetched.' };
+      }
+    } catch {
+      return { ok: false, error: "We couldn't resolve that domain. Check the URL and try again." };
+    }
+
+    return { ok: true };
+  };
+
   app.post('/api/files/extract-url', requireAuth, apiRateLimiter, async (req, res) => {
     try {
       const rawUrl = typeof req.body?.url === 'string' ? req.body.url.trim() : '';
@@ -4361,54 +4549,59 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
         return res.status(400).json({ success: false, error: 'Please enter a valid http:// or https:// URL.' });
       }
 
-      let parsedUrl: URL;
+      let currentUrl: URL;
       try {
-        parsedUrl = new URL(rawUrl);
+        currentUrl = new URL(rawUrl);
       } catch {
         return res.status(400).json({ success: false, error: 'Invalid URL format. Include http:// or https://.' });
       }
 
-      if (parsedUrl.protocol !== 'http:' && parsedUrl.protocol !== 'https:') {
-        return res.status(400).json({ success: false, error: 'Only http:// and https:// links are supported.' });
-      }
-
-      const hostname = parsedUrl.hostname.toLowerCase();
-      if (
-        hostname === 'localhost' ||
-        hostname.endsWith('.localhost') ||
-        hostname.endsWith('.local') ||
-        hostname.endsWith('.internal') ||
-        isPrivateOrReservedIp(hostname)
-      ) {
-        return res.status(400).json({ success: false, error: 'Private or local network URLs are not allowed.' });
-      }
-
-      // Resolve DNS to block SSRF via DNS rebinding or private A/AAAA records
-      try {
-        const dns = await import('dns');
-        const records = await dns.promises.lookup(hostname, { all: true });
-        if (!records || records.length === 0 || records.some(r => isPrivateOrReservedIp(r.address))) {
-          return res.status(400).json({ success: false, error: 'That URL resolves to a restricted network address and cannot be fetched.' });
-        }
-      } catch {
-        return res.status(400).json({ success: false, error: "We couldn't resolve that domain. Check the URL and try again." });
+      const initialCheck = await assertSafePublicUrl(currentUrl);
+      if (initialCheck.ok === false) {
+        return res.status(400).json({ success: false, error: initialCheck.error });
       }
 
       const MAX_URL_BYTES = 10 * 1024 * 1024; // 10 MB limit
+      const MAX_REDIRECTS = 5;
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 8000);
 
-      let response: Response;
+      let response!: Response;
       try {
-        response = await fetch(parsedUrl.toString(), {
-          method: 'GET',
-          redirect: 'follow',
-          signal: controller.signal,
-          headers: {
-            'User-Agent': 'KorsIQ-StudyHub/1.0 (+https://korsiq.com)',
-            'Accept': 'text/html,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,*/*;q=0.8'
+        for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
+          response = await fetch(currentUrl.toString(), {
+            method: 'GET',
+            redirect: 'manual',
+            signal: controller.signal,
+            headers: {
+              'User-Agent': 'KorsIQ-StudyHub/1.0 (+https://korsiq.com)',
+              'Accept': 'text/html,text/plain,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,*/*;q=0.8'
+            }
+          });
+
+          if (response.status >= 300 && response.status < 400) {
+            const location = response.headers.get('location');
+            if (!location) {
+              return res.status(400).json({ success: false, error: 'Redirect response missing Location header.' });
+            }
+            if (hop === MAX_REDIRECTS) {
+              return res.status(400).json({ success: false, error: 'Too many redirects.' });
+            }
+            let nextUrl: URL;
+            try {
+              nextUrl = new URL(location, currentUrl);
+            } catch {
+              return res.status(400).json({ success: false, error: 'Invalid redirect URL.' });
+            }
+            const hopCheck = await assertSafePublicUrl(nextUrl);
+            if (hopCheck.ok === false) {
+              return res.status(400).json({ success: false, error: 'Redirect to a restricted network address was blocked.' });
+            }
+            currentUrl = nextUrl;
+            continue;
           }
-        });
+          break;
+        }
       } finally {
         clearTimeout(timeoutId);
       }
@@ -4418,16 +4611,6 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
           success: false,
           error: `We couldn't read that link (HTTP ${response.status}). Make sure the page or file is publicly accessible.`
         });
-      }
-
-      // Re-verify final redirected URL hostname against SSRF
-      if (response.url) {
-        try {
-          const finalUrl = new URL(response.url);
-          if (isPrivateOrReservedIp(finalUrl.hostname) || finalUrl.hostname.toLowerCase() === 'localhost') {
-            return res.status(400).json({ success: false, error: 'Redirect to a private network address was blocked.' });
-          }
-        } catch {}
       }
 
       const contentLength = Number(response.headers.get('content-length') || 0);
@@ -4448,13 +4631,13 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
 
       const buffer = Buffer.from(arrayBuf);
       const contentType = (response.headers.get('content-type') || '').toLowerCase();
-      const pathPart = parsedUrl.pathname.split('/').filter(Boolean).pop() || parsedUrl.hostname;
-      const derivedName = decodeURIComponent(pathPart).slice(0, 80) || parsedUrl.hostname;
+      const pathPart = currentUrl.pathname.split('/').filter(Boolean).pop() || currentUrl.hostname;
+      const derivedName = decodeURIComponent(pathPart).slice(0, 80) || currentUrl.hostname;
 
       const isDocBinary =
         contentType.includes('application/pdf') ||
         contentType.includes('officedocument') ||
-        /\.(pdf|docx|pptx)$/i.test(parsedUrl.pathname);
+        /\.(pdf|docx|pptx)$/i.test(currentUrl.pathname);
 
       let extractedText = '';
       if (isDocBinary) {

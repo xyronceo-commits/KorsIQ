@@ -236,6 +236,7 @@ export interface GroupMaterial {
   content?: string; // Extracted plain text for AI indexing & analysis
   s3Key?: string;
   s3Url?: string;
+  scanStatus?: 'scanning' | 'clean' | 'blocked';
 }
 
 export interface GroupDiscussionReply {

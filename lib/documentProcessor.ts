@@ -2,6 +2,7 @@
 import mammoth from 'mammoth';
 import JSZip from 'jszip';
 import { GoogleGenAI } from '@google/genai';
+import { inspectZipSafety } from './uploadSecurity';
 
 export interface ExtractionResult {
   success: boolean;
@@ -280,9 +281,27 @@ export async function processDocumentBuffer(
         throw new Error('PDF parsing engine unavailable or failed to process document.');
       }
     } else if (detectedType === 'docx') {
+      const zipCheck = await inspectZipSafety(buffer, 'docx');
+      if (zipCheck.ok === false) {
+        return {
+          success: false,
+          extractedText: '',
+          error: zipCheck.error,
+          fileTypeDetected: 'docx'
+        };
+      }
       const result = await mammoth.extractRawText({ buffer });
       rawExtracted = result.value || '';
     } else if (detectedType === 'pptx') {
+      const zipCheck = await inspectZipSafety(buffer, 'pptx');
+      if (zipCheck.ok === false) {
+        return {
+          success: false,
+          extractedText: '',
+          error: zipCheck.error,
+          fileTypeDetected: 'pptx'
+        };
+      }
       const zip = await JSZip.loadAsync(buffer);
       const slideFiles = Object.keys(zip.files).filter(k => /^ppt\/slides\/slide\d+\.xml$/i.test(k));
       

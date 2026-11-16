@@ -1113,7 +1113,7 @@ export const DBService = {
           if (presignData.uploadUrl && presignData.key) {
             const s3PutRes = await fetch(presignData.uploadUrl, {
               method: 'PUT',
-              headers: { 'Content-Type': file.type || 'application/octet-stream' },
+              headers: { 'Content-Type': presignData.contentType || file.type || 'application/octet-stream' },
               body: file
             });
             if (s3PutRes.ok) {
@@ -1191,10 +1191,17 @@ export const DBService = {
             extractionError = resData.error || 'Text extraction was unable to parse this document structure.';
           }
         } else {
+          const errData = await resp.json().catch(() => ({}));
+          if (resp.status === 400 && errData.scanStatus === 'blocked') {
+            throw new Error(errData.error || 'File failed security verification and was blocked.');
+          }
           processingStatus = 'failed';
-          extractionError = 'Text extraction server request failed.';
+          extractionError = errData.error || 'Text extraction server request failed.';
         }
       } catch (extErr: any) {
+        if (extErr?.message && /security|blocked|signature|archive|unsupported/i.test(extErr.message)) {
+          throw extErr;
+        }
         processingStatus = 'failed';
         extractionError = extErr?.message || 'Text extraction failed.';
         console.warn('Material text extraction warning:', extErr);
@@ -2407,13 +2414,37 @@ export const DBService = {
         if (presignData.uploadUrl && presignData.key) {
           const s3PutRes = await fetch(presignData.uploadUrl, {
             method: 'PUT',
-            headers: { 'Content-Type': file.type || 'application/octet-stream' },
+            headers: { 'Content-Type': presignData.contentType || file.type || 'application/octet-stream' },
             body: file
           });
           if (s3PutRes.ok) {
             uploadedSuccessfully = true;
             storagePath = presignData.key;
             usedBucket = presignData.bucket || USER_FILES_BUCKET;
+            // Scan uploaded object server-side
+            try {
+              const scanRes = await fetch('/api/s3/scan', {
+                method: 'POST',
+                headers: {
+                  'Content-Type': 'application/json',
+                  ...(token ? { Authorization: `Bearer ${token}` } : {})
+                },
+                body: JSON.stringify({
+                  key: storagePath,
+                  bucket: usedBucket,
+                  fileName: file.name,
+                  fileId
+                })
+              });
+              if (scanRes.status === 400) {
+                const scanErr = await scanRes.json().catch(() => ({}));
+                throw new Error(scanErr.error || 'File failed security verification and was blocked.');
+              }
+            } catch (scanCheckErr: any) {
+              if (scanCheckErr?.message && /security|blocked|signature|archive|unsupported/i.test(scanCheckErr.message)) {
+                throw scanCheckErr;
+              }
+            }
           }
         }
       }
