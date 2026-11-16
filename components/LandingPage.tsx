@@ -14,6 +14,8 @@ import {
   FileCheck
 } from 'lucide-react';
 import KorsIQLogo from './KorsIQLogo';
+import { BILLING_ENABLED, PLANS, PLAN_ORDER } from '../lib/plans';
+import { PAYSTACK_PAYMENT_LINKS } from '../constants';
 
 interface LandingPageProps {
   onStart: () => void;
@@ -251,8 +253,15 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onStart, onSignIn }) =
         </div>
       </section>
 
-      {/* 5. Section: "Simple pricing" */}
-      <section id="pricing" className="py-16 sm:py-20 px-4 sm:px-6 max-w-5xl mx-auto border-t border-[#E5E7EB] dark:border-slate-800">
+      {/* 5. Section: Pricing (or single early-access line when billing is off) */}
+      {!BILLING_ENABLED ? (
+        <section className="py-10 px-4 sm:px-6 max-w-5xl mx-auto border-t border-[#E5E7EB] dark:border-slate-800 text-center">
+          <p className="text-sm sm:text-base font-medium text-[#5B6472] dark:text-slate-300">
+            Free during early access.
+          </p>
+        </section>
+      ) : (
+        <section id="pricing" className="py-16 sm:py-20 px-4 sm:px-6 max-w-5xl mx-auto border-t border-[#E5E7EB] dark:border-slate-800">
         <div className="text-center mb-12 sm:mb-14">
           <h2 className="text-2xl sm:text-3xl font-bold text-[#111827] dark:text-white">Simple pricing</h2>
           <p className="text-sm sm:text-base text-[#5B6472] dark:text-slate-400 mt-1">Start free. Move up when you need more.</p>
@@ -260,123 +269,73 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onStart, onSignIn }) =
 
         {/* 3 Pricing Cards */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-6 items-stretch">
-          {/* Card 1: Free */}
-          <div className="bg-white dark:bg-slate-900 rounded-lg border border-[#E5E7EB] dark:border-slate-800 p-6 flex flex-col justify-between">
-            <div>
-              <h3 className="text-lg font-bold text-[#111827] dark:text-white">Free</h3>
-              <p className="text-xs text-[#5B6472] dark:text-slate-400 mt-0.5">Get organised.</p>
-              
-              <div className="mt-4 mb-6">
-                <span className="text-2xl sm:text-3xl font-bold text-[#111827] dark:text-white">₦0</span>
-                <span className="text-xs text-[#5B6472] dark:text-slate-400 ml-1">/ month</span>
-              </div>
-
-              <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs sm:text-sm text-[#111827] dark:text-slate-200">
-                <div className="flex items-center gap-2">
-                  <Check size={14} className="text-[#2563EB] shrink-0" />
-                  <span>CGPA and course tracking</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Check size={14} className="text-[#2563EB] shrink-0" />
-                  <span>Study timetable</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Check size={14} className="text-[#2563EB] shrink-0" />
-                  <span>Limited AI help</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="mt-8 pt-4">
-              <button
-                type="button"
-                onClick={onStart}
-                className="w-full py-2.5 px-4 text-sm font-medium text-[#111827] dark:text-white bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60 rounded-lg transition-colors min-h-[44px] flex items-center justify-center cursor-pointer"
+          {PLAN_ORDER.map((tierKey) => {
+            const plan = PLANS[tierKey];
+            const isHighlighted = tierKey === 'plus';
+            const payLink =
+              tierKey === 'plus'
+                ? PAYSTACK_PAYMENT_LINKS.plus
+                : tierKey === 'studio'
+                  ? PAYSTACK_PAYMENT_LINKS.studio
+                  : null;
+            return (
+              <div
+                key={tierKey}
+                className={`bg-white dark:bg-slate-900 rounded-lg p-6 flex flex-col justify-between ${
+                  isHighlighted
+                    ? 'border-2 border-[#2563EB] shadow-sm relative'
+                    : 'border border-[#E5E7EB] dark:border-slate-800'
+                }`}
               >
-                Start free
-              </button>
-            </div>
-          </div>
+                <div>
+                  <h3 className="text-lg font-bold text-[#111827] dark:text-white">{plan.displayName}</h3>
+                  <p className="text-xs text-[#5B6472] dark:text-slate-400 mt-0.5">{plan.tagline}</p>
 
-          {/* Card 2: Plus (Highlighted with single primary button per spec) */}
-          <div className="bg-white dark:bg-slate-900 rounded-lg border-2 border-[#2563EB] p-6 flex flex-col justify-between shadow-sm relative">
-            <div>
-              <h3 className="text-lg font-bold text-[#111827] dark:text-white">Plus</h3>
-              <p className="text-xs text-[#5B6472] dark:text-slate-400 mt-0.5">Study smarter.</p>
+                  <div className="mt-4 mb-6">
+                    <span className="text-2xl sm:text-3xl font-bold text-[#111827] dark:text-white">{plan.priceFormatted}</span>
+                    <span className="text-xs text-[#5B6472] dark:text-slate-400 ml-1">/ {plan.periodLabel}</span>
+                  </div>
 
-              <div className="mt-4 mb-6">
-                <span className="text-2xl sm:text-3xl font-bold text-[#111827] dark:text-white">₦7,500</span>
-                <span className="text-xs text-[#5B6472] dark:text-slate-400 ml-1">/ month</span>
-              </div>
-
-              <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs sm:text-sm text-[#111827] dark:text-slate-200">
-                <div className="flex items-center gap-2">
-                  <Check size={14} className="text-[#2563EB] shrink-0" />
-                  <span>More AI help</span>
+                  <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs sm:text-sm text-[#111827] dark:text-slate-200">
+                    {plan.features.map((feat) => (
+                      <div key={feat} className="flex items-start gap-2">
+                        <Check size={14} className="text-[#2563EB] shrink-0 mt-0.5" />
+                        <span>{feat}</span>
+                      </div>
+                    ))}
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Check size={14} className="text-[#2563EB] shrink-0" />
-                  <span>Lite Studio and exports</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Check size={14} className="text-[#2563EB] shrink-0" />
-                  <span>Create circles</span>
-                </div>
-              </div>
-            </div>
 
-            <div className="mt-8 pt-4">
-              <a
-                href="https://paystack.shop/pay/c-mcwwacc8"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full py-2.5 px-4 text-sm font-medium text-white bg-[#2563EB] hover:bg-[#1D4ED8] rounded-lg transition-colors min-h-[44px] flex items-center justify-center shadow-xs cursor-pointer text-center"
-              >
-                Choose Plus
-              </a>
-            </div>
-          </div>
-
-          {/* Card 3: KorsIQ Premium (Renamed from Academic Studio) */}
-          <div className="bg-white dark:bg-slate-900 rounded-lg border border-[#E5E7EB] dark:border-slate-800 p-6 flex flex-col justify-between">
-            <div>
-              <h3 className="text-lg font-bold text-[#111827] dark:text-white">KorsIQ Premium</h3>
-              <p className="text-xs text-[#5B6472] dark:text-slate-400 mt-0.5">Research, write and produce.</p>
-
-              <div className="mt-4 mb-6">
-                <span className="text-2xl sm:text-3xl font-bold text-[#111827] dark:text-white">₦15,000</span>
-                <span className="text-xs text-[#5B6472] dark:text-slate-400 ml-1">/ month</span>
-              </div>
-
-              <div className="space-y-3 pt-2 border-t border-slate-100 dark:border-slate-800 text-xs sm:text-sm text-[#111827] dark:text-slate-200">
-                <div className="flex items-center gap-2">
-                  <Check size={14} className="text-[#2563EB] shrink-0" />
-                  <span>Full Studio workspace</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Check size={14} className="text-[#2563EB] shrink-0" />
-                  <span>Version history</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Check size={14} className="text-[#2563EB] shrink-0" />
-                  <span>Highest AI allowance</span>
+                <div className="mt-8 pt-4">
+                  {payLink ? (
+                    <a
+                      href={payLink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className={`w-full py-2.5 px-4 text-sm font-medium rounded-lg transition-colors min-h-[44px] flex items-center justify-center cursor-pointer text-center ${
+                        isHighlighted
+                          ? 'text-white bg-[#2563EB] hover:bg-[#1D4ED8] shadow-xs'
+                          : 'text-[#111827] dark:text-white bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60'
+                      }`}
+                    >
+                      Choose {plan.displayName}
+                    </a>
+                  ) : (
+                    <button
+                      type="button"
+                      onClick={onStart}
+                      className="w-full py-2.5 px-4 text-sm font-medium text-[#111827] dark:text-white bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60 rounded-lg transition-colors min-h-[44px] flex items-center justify-center cursor-pointer"
+                    >
+                      Start {plan.displayName.toLowerCase()}
+                    </button>
+                  )}
                 </div>
               </div>
-            </div>
-
-            <div className="mt-8 pt-4">
-              <a
-                href="https://paystack.shop/pay/asaup43dpk"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="w-full py-2.5 px-4 text-sm font-medium text-[#111827] dark:text-white bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700/60 rounded-lg transition-colors min-h-[44px] flex items-center justify-center cursor-pointer text-center"
-              >
-                Choose Premium
-              </a>
-            </div>
-          </div>
+            );
+          })}
         </div>
-      </section>
+        </section>
+      )}
 
       {/* 6. Section: "Ready to get organised?" */}
       <section className="py-16 sm:py-20 px-4 sm:px-6 text-center max-w-3xl mx-auto border-t border-[#E5E7EB] dark:border-slate-800">

@@ -9,6 +9,7 @@ import {
   GroupDiscussionReply,
   GroupMember
 } from '../types';
+import { checkLimit } from '../lib/plans';
 import { 
   Globe, 
   Lock, 
@@ -206,17 +207,20 @@ export const StudyGroups: React.FC<StudyGroupsProps> = ({
   const userTier = (profile.tier || 'free').toLowerCase();
   const createdCirclesCount = groups.filter(g => g.ownerId === currentUserId).length;
   const joinedCirclesCount = groups.filter(g => g.ownerId !== currentUserId).length;
-  const canCreateCircle = userTier === 'studio' || userTier === 'sage' 
-    ? true 
-    : userTier === 'plus' || userTier === 'scholar' 
-    ? createdCirclesCount < 3 
-    : createdCirclesCount < 1;
-
-  const canJoinMoreCircles = userTier === 'studio' || userTier === 'sage' 
-    ? true 
-    : userTier === 'plus' || userTier === 'scholar' 
-    ? joinedCirclesCount < 10 
-    : joinedCirclesCount < 2;
+  const circleCreateCheck = checkLimit({
+    tier: userTier,
+    resource: 'circlesCreate',
+    currentCount: createdCirclesCount,
+    incomingCount: 1,
+  });
+  const circleJoinCheck = checkLimit({
+    tier: userTier,
+    resource: 'circlesJoin',
+    currentCount: joinedCirclesCount,
+    incomingCount: 1,
+  });
+  const canCreateCircle = circleCreateCheck.allowed;
+  const canJoinMoreCircles = circleJoinCheck.allowed;
 
   // Handle Post Creation (Owner or Co-Owner)
   const handleCreatePost = async (e: React.FormEvent) => {
@@ -379,7 +383,7 @@ export const StudyGroups: React.FC<StudyGroupsProps> = ({
   // Handle Joining a General Circle (Side 1)
   const handleJoinGeneralCircle = async (circle: StudyGroup) => {
     if (!canJoinMoreCircles) {
-      setJoinError('You have reached the joined circle limit for your plan. Upgrade to join more circles.');
+      setJoinError(circleJoinCheck.blockMessage || 'You have reached the joined circle limit.');
       return;
     }
     setIsJoining(true);
@@ -435,7 +439,7 @@ export const StudyGroups: React.FC<StudyGroupsProps> = ({
     }
 
     if (!canJoinMoreCircles) {
-      setJoinError('You have reached the joined circle limit for your plan. Upgrade to join more circles.');
+      setJoinError(circleJoinCheck.blockMessage || 'You have reached the joined circle limit.');
       return;
     }
 

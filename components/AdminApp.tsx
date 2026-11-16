@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import KorsIQLogo from './KorsIQLogo';
+import { BILLING_ENABLED } from '../lib/plans';
 import { 
   ShieldCheck, 
   Mail, 
@@ -595,6 +596,7 @@ export const AdminApp: React.FC<AdminAppProps> = ({ onExit }) => {
             <span>Users</span>
           </button>
 
+          {BILLING_ENABLED && (
           <button
             onClick={() => setActiveTab('payments')}
             className={`px-4 py-2 rounded-lg text-xs font-semibold min-h-[44px] flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
@@ -604,6 +606,7 @@ export const AdminApp: React.FC<AdminAppProps> = ({ onExit }) => {
             <CreditCard size={15} />
             <span>Payments</span>
           </button>
+          )}
 
           <button
             onClick={() => setActiveTab('circles')}
@@ -615,6 +618,7 @@ export const AdminApp: React.FC<AdminAppProps> = ({ onExit }) => {
             <span>Circles</span>
           </button>
 
+          {BILLING_ENABLED && (
           <button
             onClick={() => setActiveTab('credits')}
             className={`px-4 py-2 rounded-lg text-xs font-semibold min-h-[44px] flex items-center gap-1.5 transition-colors cursor-pointer whitespace-nowrap ${
@@ -624,6 +628,7 @@ export const AdminApp: React.FC<AdminAppProps> = ({ onExit }) => {
             <DollarSign size={15} />
             <span>Credits</span>
           </button>
+          )}
 
           <button
             onClick={() => setActiveTab('audit')}
@@ -647,12 +652,63 @@ export const AdminApp: React.FC<AdminAppProps> = ({ onExit }) => {
         {/* TAB 1: OVERVIEW */}
         {!isDataLoading && activeTab === 'overview' && overviewData && (
           <div className="space-y-6">
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+            {/* Traction Card (for the "15 active users" billing decision) */}
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="text-sm font-bold text-slate-900 dark:text-white">Traction (Last 7 Days)</h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Active users added a course, uploaded a file, used AI, or edited an Academic Studio doc.
+                  </p>
+                </div>
+                <span className="px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-950/60 text-blue-700 dark:text-blue-300 text-xs font-semibold border border-blue-100 dark:border-blue-900">
+                  Goal: {overviewData.traction?.goal ?? 15} active users
+                </span>
+              </div>
+
+              <div className="grid grid-cols-2 sm:grid-cols-5 gap-4 pt-1">
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 space-y-0.5">
+                  <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Total Signups</p>
+                  <p className="text-2xl font-bold text-slate-900 dark:text-white">
+                    {overviewData.traction?.totalSignups ?? overviewData.totalUsers ?? 0}
+                  </p>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 space-y-0.5">
+                  <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Active Users (7d)</p>
+                  <p className="text-2xl font-bold text-blue-600 dark:text-blue-400">
+                    {overviewData.traction?.activeUsers7d ?? 0}
+                    <span className="text-xs font-medium text-slate-400 ml-1">/ {overviewData.traction?.goal ?? 15}</span>
+                  </p>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 space-y-0.5">
+                  <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Courses (7d)</p>
+                  <p className="text-2xl font-bold text-slate-900 dark:text-white">
+                    {overviewData.traction?.coursesCreated7d ?? 0}
+                  </p>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 space-y-0.5">
+                  <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">Files (7d)</p>
+                  <p className="text-2xl font-bold text-slate-900 dark:text-white">
+                    {overviewData.traction?.filesUploaded7d ?? 0}
+                  </p>
+                </div>
+                <div className="p-3 rounded-lg bg-slate-50 dark:bg-slate-800/50 space-y-0.5">
+                  <p className="text-[11px] font-semibold text-slate-500 uppercase tracking-wider">AI Actions (7d)</p>
+                  <p className="text-2xl font-bold text-slate-900 dark:text-white">
+                    {overviewData.traction?.aiActions7d ?? 0}
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className={`grid grid-cols-1 sm:grid-cols-2 ${BILLING_ENABLED ? 'lg:grid-cols-5' : 'lg:grid-cols-2'} gap-4`}>
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-1">
                 <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider">Registered Users</p>
                 <p className="text-3xl font-bold text-slate-900 dark:text-white">{overviewData.totalUsers}</p>
               </div>
 
+              {BILLING_ENABLED && (
+              <>
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-1">
                 <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider">Active Subscriptions</p>
                 <p className="text-3xl font-bold text-blue-600 dark:text-blue-400">{overviewData.activeSubscriptions}</p>
@@ -669,6 +725,8 @@ export const AdminApp: React.FC<AdminAppProps> = ({ onExit }) => {
                   ₦{(overviewData.monthRevenue || 0).toLocaleString()}
                 </p>
               </div>
+              </>
+              )}
 
               <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 space-y-1">
                 <p className="text-xs text-slate-400 font-semibold uppercase tracking-wider">Study Circles</p>

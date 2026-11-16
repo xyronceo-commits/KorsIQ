@@ -2,7 +2,8 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Course, StudyHubData, LibraryFile, Flashcard, QuizQuestion, StudyGroup, UserProfile, GroupMessage, AppNotification, AppState, UserFile } from '../types';
 import { ICONS } from '../constants';
-import { Sparkles, AudioWaveform, ChevronLeft, ChevronRight, RefreshCw, Layers, Grid, Check, X, HelpCircle, Trophy, Award, RotateCcw, Trash2, Folder, Download, Upload, Loader2, AlertCircle, FileText, File, ScanText, Camera, Image, FileSearch, CheckCircle2, ArrowUpRight, BookOpen, Plus, MessageSquare, Link as LinkIcon } from 'lucide-react';
+import { BookOpen as Sparkles, AudioWaveform, ChevronLeft, ChevronRight, RefreshCw, Layers, Grid, Check, X, HelpCircle, Trophy, Award, RotateCcw, Trash2, Folder, Download, Upload, Loader2, AlertCircle, FileText, File, ScanText, Camera, Image, FileSearch, CheckCircle2, ArrowUpRight, BookOpen, Plus, MessageSquare, Link as LinkIcon } from 'lucide-react';
+import { BILLING_ENABLED } from '../lib/plans';
 import { GeminiService } from '../services/gemini';
 import { DBService } from '../services/db';
 import { getCurrentUserId, getAccessToken } from '../lib/supabase';
@@ -768,13 +769,13 @@ const StudyHub: React.FC<StudyHubProps> = ({
   };
 
   const tools = [
-    { id: 'summary', label: 'Summary', icon: ICONS.FileText, desc: '1 credit' },
-    { id: 'ai', label: 'AI', icon: <MessageSquare size={18} />, desc: 'Chat & History (Free)' },
+    { id: 'summary', label: 'Summary', icon: ICONS.FileText, desc: BILLING_ENABLED ? '1 credit' : 'Executive overview' },
+    { id: 'ai', label: 'AI', icon: <MessageSquare size={18} />, desc: BILLING_ENABLED ? 'Chat & History (Free)' : 'Chat & History' },
     { id: 'library', label: 'Library', icon: ICONS.Library, desc: 'Syllabus & Notes' },
-    { id: 'flashcards', label: 'Flashcards', icon: ICONS.RotateCcw, desc: '2 credits' },
-    { id: 'quiz', label: 'Practice Quiz', icon: ICONS.CheckCircle, desc: '2 credits' },
-    { id: 'test', label: 'Practice Test', icon: <Award size={20} />, desc: '2 credits' },
-    { id: 'podcast', label: 'AI Podcast', icon: <AudioWaveform size={18} />, desc: '6 credits' },
+    { id: 'flashcards', label: 'Flashcards', icon: ICONS.RotateCcw, desc: BILLING_ENABLED ? '2 credits' : 'Active recall' },
+    { id: 'quiz', label: 'Practice Quiz', icon: ICONS.CheckCircle, desc: BILLING_ENABLED ? '2 credits' : 'Multiple choice' },
+    { id: 'test', label: 'Practice Test', icon: <Award size={20} />, desc: BILLING_ENABLED ? '2 credits' : 'Timed exam' },
+    { id: 'podcast', label: 'AI Podcast', icon: <AudioWaveform size={18} />, desc: BILLING_ENABLED ? '6 credits' : 'Audio overview' },
   ];
 
   if (!activeCourseId || !currentCourse) {
@@ -1093,7 +1094,7 @@ const StudyHub: React.FC<StudyHubProps> = ({
 
         {/* Main Workbench Display */}
         <div className="lg:col-span-8 xl:col-span-9 min-h-[500px] bg-white rounded-xl p-6 sm:p-8 relative border border-slate-200 shadow-2xs transition-all duration-300">
-          {insufficientCreditsNotice && (
+          {BILLING_ENABLED && insufficientCreditsNotice && (
             <div
               role="alert"
               className="mb-6 p-4 rounded-xl border border-amber-200 bg-amber-50 text-amber-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
@@ -1218,7 +1219,7 @@ const StudyHub: React.FC<StudyHubProps> = ({
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 pb-10 gap-4">
                   <h3 className="text-3xl sm:text-4xl font-serif font-bold tracking-tight text-slate-900">Executive Summary</h3>
                   <button onClick={() => generateTool('summary')} className="flex items-center gap-3 text-xs font-bold uppercase tracking-widest text-blue-700 hover:text-blue-800 transition-all p-3 bg-blue-50 rounded-xl border border-blue-100 cursor-pointer">
-                     <span className="group-hover:rotate-180 transition-transform duration-700">{ICONS.RotateCcw}</span> Regenerate — 1 credit
+                     <span className="group-hover:rotate-180 transition-transform duration-700">{ICONS.RotateCcw}</span> {BILLING_ENABLED ? 'Regenerate — 1 credit' : 'Regenerate'}
                   </button>
                 </div>
                 <div className="prose max-w-none text-slate-700 text-lg sm:text-xl leading-[1.7] space-y-8 font-medium prose-slate prose-p:leading-relaxed prose-headings:font-serif">
@@ -1236,7 +1237,7 @@ const StudyHub: React.FC<StudyHubProps> = ({
                     onClick={() => generateTool('summary')} 
                     className="px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shadow-xs transition-colors text-xs cursor-pointer min-h-[44px]"
                   >
-                    Generate Summary — 1 credit
+                    {BILLING_ENABLED ? 'Generate Summary — 1 credit' : 'Generate Summary'}
                   </button>
               </div>
             )}
@@ -1965,7 +1966,7 @@ const StudyHub: React.FC<StudyHubProps> = ({
                     onClick={() => generateTool('test')} 
                     className="px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shadow-xs transition-colors text-xs cursor-pointer min-h-[44px]"
                   >
-                    Generate Practice Test — 2 credits
+                    {BILLING_ENABLED ? 'Generate Practice Test — 2 credits' : 'Generate Practice Test'}
                   </button>
               </div>
             )}
@@ -1979,7 +1980,7 @@ const StudyHub: React.FC<StudyHubProps> = ({
                     onClick={() => generateTool('quiz')} 
                     className="px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shadow-xs transition-colors text-xs cursor-pointer min-h-[44px]"
                   >
-                    Practice Quiz — 2 credits
+                    {BILLING_ENABLED ? 'Practice Quiz — 2 credits' : 'Practice Quiz'}
                   </button>
               </div>
             )}
@@ -1993,7 +1994,7 @@ const StudyHub: React.FC<StudyHubProps> = ({
                     onClick={() => generateTool('flashcards')} 
                     className="px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shadow-xs transition-colors text-xs cursor-pointer min-h-[44px]"
                   >
-                    Flashcards — 2 credits
+                    {BILLING_ENABLED ? 'Flashcards — 2 credits' : 'Flashcards'}
                   </button>
               </div>
             )}
@@ -2012,7 +2013,9 @@ const StudyHub: React.FC<StudyHubProps> = ({
                     onClick={generatePodcastTool}
                     className="px-4 py-2.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg text-xs font-semibold min-h-[44px] cursor-pointer shrink-0"
                   >
-                    {activeHub.transcript ? 'Regenerate AI Podcast — 6 credits' : 'AI Podcast — 6 credits'}
+                    {BILLING_ENABLED
+                      ? (activeHub.transcript ? 'Regenerate AI Podcast — 6 credits' : 'AI Podcast — 6 credits')
+                      : (activeHub.transcript ? 'Regenerate AI Podcast' : 'AI Podcast')}
                   </button>
                 </div>
 

@@ -58,6 +58,9 @@ import {
 import { DBService } from '../services/db';
 import { GeminiService } from '../services/gemini';
 import { generateDocxBlob, downloadDocx } from '../utils/docxExport';
+import { downloadPdf } from '../utils/pdfExport';
+import { downloadPptx } from '../utils/pptxExport';
+import { BILLING_ENABLED, can, getPlanDisplayName } from '../lib/plans';
 import KorsIQLogo from './KorsIQLogo';
 import SubscriptionCheckoutModal from './SubscriptionCheckoutModal';
 
@@ -94,7 +97,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   onNavigateTab
 }) => {
   // Subscription Entitlement Check
-  const isPremium = hasStudioPrivileges(profile);
+  const isPremium = can('academicStudio', profile?.tier) && (BILLING_ENABLED ? hasStudioPrivileges(profile) : true);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [checkoutPlan, setCheckoutPlan] = useState<'plus' | 'studio'>('studio');
@@ -153,6 +156,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   // Preview & Export Modal State
   const [showExportModal, setShowExportModal] = useState(false);
   const [isExportingDocx, setIsExportingDocx] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isExportingPptx, setIsExportingPptx] = useState(false);
   const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
   const [insufficientCreditsNotice, setInsufficientCreditsNotice] = useState<{
     required: number;
@@ -166,8 +171,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   const [editorHistory, setEditorHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
 
-  const isExportAllowed = hasStudioPrivileges(profile);
-  const isVersionsAllowed = hasFullStudioPrivileges(profile);
+  const isExportAllowed = can('studioExports', profile?.tier) && (BILLING_ENABLED ? hasFullStudioPrivileges(profile) : true);
+  const isVersionsAllowed = can('fullAcademicStudio', profile?.tier) && (BILLING_ENABLED ? hasFullStudioPrivileges(profile) : true);
 
   const handleEditorChangeWithHistory = (newVal: string) => {
     handleEditorChange(newVal);
@@ -877,7 +882,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   // =========================================================
 
   const handleExportDocx = async () => {
-    if (!activeDocument) return;
+    if (!activeDocument || !isExportAllowed) return;
     setIsExportingDocx(true);
     try {
       const blob = await generateDocxBlob(activeDocument);
@@ -892,8 +897,34 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     }
   };
 
-  const handlePrintPdf = () => {
-    window.print();
+  const handleExportPdf = async () => {
+    if (!activeDocument || !isExportAllowed) return;
+    setIsExportingPdf(true);
+    try {
+      const safeTitle = activeDocument.title.replace(/[^a-zA-Z0-9_-]/g, '_');
+      downloadPdf(activeDocument, `${safeTitle}.pdf`);
+      showToast('PDF document exported successfully!');
+    } catch (err) {
+      console.error('PDF export failed:', err);
+      showToast('Failed to export PDF document.');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  const handleExportPptx = async () => {
+    if (!activeDocument || !isExportAllowed) return;
+    setIsExportingPptx(true);
+    try {
+      const safeTitle = activeDocument.title.replace(/[^a-zA-Z0-9_-]/g, '_');
+      await downloadPptx(activeDocument, `${safeTitle}.pptx`);
+      showToast('PowerPoint presentation exported successfully!');
+    } catch (err) {
+      console.error('PPTX export failed:', err);
+      showToast('Failed to export PowerPoint presentation.');
+    } finally {
+      setIsExportingPptx(false);
+    }
   };
 
   // Document Management Operations
@@ -1437,7 +1468,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                   if (!isExportAllowed) {
                     setShowQuietUpgrade({
                       feature: 'Export Manuscript',
-                      description: 'Exporting formatted Microsoft Word (.docx) and PDF documents is included in the Plus and Academic Studio plans.'
+                      description: `Exporting formatted Word (.docx), PDF (.pdf), and PowerPoint (.pptx) files is included in the ${getPlanDisplayName('studio')} plan.`
                     });
                   } else {
                     setShowExportModal(true);
@@ -1600,7 +1631,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                           onClick={() => handleContextualAssist('Elevate academic tone and vocabulary')}
                           className="px-2.5 py-1 bg-[#2563EB] hover:bg-blue-500 rounded text-xs font-semibold cursor-pointer"
                         >
-                          Rewrite — 1 credit
+                          {BILLING_ENABLED ? 'Rewrite — 1 credit' : 'Rewrite'}
                         </button>
                         <button
                           onClick={() => setSelectedTextSnippet('')}
@@ -1643,7 +1674,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     className="w-full py-2.5 px-3 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer shadow-sm disabled:opacity-50 min-h-[44px]"
                   >
                     <Wand2 size={14} />
-                    <span>{isSectionGenerating ? 'Drafting...' : 'Write Section — 3 credits'}</span>
+                    <span>{isSectionGenerating ? 'Drafting...' : (BILLING_ENABLED ? 'Write Section — 3 credits' : 'Write Section')}</span>
                   </button>
 
                   <button
@@ -1653,7 +1684,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     className="w-full py-2 px-3 bg-white dark:bg-slate-800 border border-[#2563EB]/40 hover:bg-blue-50/50 dark:hover:bg-slate-700 text-[#2563EB] dark:text-blue-400 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 min-h-[44px]"
                   >
                     <Layers size={14} />
-                    <span>{batchProgress ? 'Drafting Full Document...' : 'Generate Full Document — 10 credits'}</span>
+                    <span>{batchProgress ? 'Drafting Full Document...' : (BILLING_ENABLED ? 'Generate Full Document — 10 credits' : 'Generate Full Document')}</span>
                   </button>
 
                   <button
@@ -1668,7 +1699,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     disabled={isSectionGenerating || isAssistLoading || !editorText}
                     className="w-full py-2 px-3 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-[#111827] dark:text-white rounded-lg text-xs font-medium flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 min-h-[44px]"
                   >
-                    <span>{isAssistLoading ? 'Rewriting...' : 'Rewrite — 1 credit'}</span>
+                    <span>{isAssistLoading ? 'Rewriting...' : (BILLING_ENABLED ? 'Rewrite — 1 credit' : 'Rewrite')}</span>
                   </button>
 
                   <button
@@ -1677,7 +1708,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     disabled={isReviewLoading}
                     className="w-full py-2 px-3 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-[#111827] dark:text-white rounded-lg text-xs font-medium flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 min-h-[44px]"
                   >
-                    <span>{isReviewLoading ? 'Checking...' : 'Check citations — 1 credit'}</span>
+                    <span>{isReviewLoading ? 'Checking...' : (BILLING_ENABLED ? 'Check citations — 1 credit' : 'Check citations')}</span>
                   </button>
                 </div>
 
@@ -2202,7 +2233,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     ) : (
                       <>
                         <Wand2 size={14} />
-                        <span>Generate Outline — 2 credits</span>
+                        <span>{BILLING_ENABLED ? 'Generate Outline — 2 credits' : 'Generate Outline'}</span>
                       </>
                     )}
                   </button>
@@ -2354,11 +2385,21 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
               </button>
 
               <button
-                onClick={handlePrintPdf}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                onClick={handleExportPdf}
+                disabled={isExportingPdf}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
               >
-                <Printer size={13} />
-                <span>Print / Save as PDF</span>
+                <Download size={13} />
+                <span>{isExportingPdf ? 'Exporting...' : 'PDF Document (.pdf)'}</span>
+              </button>
+
+              <button
+                onClick={handleExportPptx}
+                disabled={isExportingPptx}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                <Download size={13} />
+                <span>{isExportingPptx ? 'Exporting...' : 'PowerPoint (.pptx)'}</span>
               </button>
 
               <div className="text-xs text-slate-500 ml-auto font-medium">

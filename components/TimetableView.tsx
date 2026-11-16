@@ -1,6 +1,6 @@
 import React from 'react';
 import { Course, StudySession } from '../types';
-import { Calendar, Download, Sparkles, Clock } from 'lucide-react';
+import { Calendar, Download, Clock } from 'lucide-react';
 
 interface TimetableViewProps {
   schedule: StudySession[];
@@ -101,7 +101,7 @@ const TimetableView: React.FC<TimetableViewProps> = ({ schedule, courses }) => {
       <div className="bg-white p-5 rounded-xl border border-slate-200 shadow-2xs flex flex-col sm:flex-row items-center justify-between gap-4">
         <div className="flex items-center gap-3">
           <div className="w-9 h-9 rounded-lg bg-blue-50 border border-blue-100 flex items-center justify-center text-blue-600 shrink-0">
-            <Sparkles size={16} />
+            <Clock size={16} />
           </div>
           <div>
             <h4 className="text-xs font-semibold text-slate-900">Dynamic Timetable Balancing</h4>
