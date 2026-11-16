@@ -240,6 +240,33 @@ function newActivity(groupId: string, type: GroupActivity['type'], title: string
   };
 }
 
+function isSchemaColumnError(err: any): boolean {
+  const code = String(err?.code || '');
+  const msg = String(err?.message || '').toLowerCase();
+  return code === 'PGRST204' || msg.includes('schema cache') || msg.includes('could not find the');
+}
+
+function buildCourseRow(userId: string, course: Course, includeOptional = true, includeArchived = true) {
+  const base: Record<string, any> = {
+    id: course.id || `course_${rand(8)}`,
+    user_id: userId,
+    code: course.code,
+    name: course.title,
+    difficulty: course.difficulty,
+    credits: course.units,
+    description: course.description || '',
+  };
+  if (includeOptional) {
+    base.topics = course.topics || [];
+    base.ca_score = course.caScore ?? null;
+    base.exam_weight = course.examWeight ?? 70;
+  }
+  if (includeArchived) {
+    base.archived_at = course.archivedAt ?? null;
+  }
+  return base;
+}
+
 export const DBService = {
   // ---------------- Profiles ----------------
   async getProfile(userId: string): Promise<UserProfile | null> {
@@ -420,22 +447,24 @@ export const DBService = {
       const courseId = course.id || `course_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
       const merged = { ...course, id: courseId };
 
-      const { error } = await supabase.from('courses').upsert(
-        {
-          id: courseId,
-          user_id: userId,
-          code: course.code,
-          name: course.title,
-          difficulty: course.difficulty,
-          credits: course.units,
-          description: course.description || '',
-          topics: course.topics || [],
-          ca_score: course.caScore ?? null,
-          exam_weight: course.examWeight ?? 70,
-          archived_at: course.archivedAt ?? null,
-        },
+      let { error } = await supabase.from('courses').upsert(
+        buildCourseRow(userId, merged, true, true),
         { onConflict: 'id' }
       );
+      if (error && isSchemaColumnError(error)) {
+        const retryWithoutArchive = await supabase.from('courses').upsert(
+          buildCourseRow(userId, merged, true, false),
+          { onConflict: 'id' }
+        );
+        error = retryWithoutArchive.error;
+        if (error && isSchemaColumnError(error)) {
+          const retryCoreOnly = await supabase.from('courses').upsert(
+            buildCourseRow(userId, merged, false, false),
+            { onConflict: 'id' }
+          );
+          error = retryCoreOnly.error;
+        }
+      }
       if (error) throw error;
 
       const list = readCache<Course[]>('courses', userId, []);
@@ -486,20 +515,21 @@ export const DBService = {
         return { error: null };
       }
 
-      const rows = courses.map((c) => ({
-        id: c.id || `course_${rand(8)}`,
-        user_id: userId,
-        code: c.code,
-        name: c.title,
-        difficulty: c.difficulty,
-        credits: c.units,
-        description: c.description || '',
-        topics: c.topics || [],
-        ca_score: c.caScore ?? null,
-        exam_weight: c.examWeight ?? 70,
-        archived_at: c.archivedAt ?? null,
-      }));
-      const { error } = await supabase.from('courses').upsert(rows, { onConflict: 'id' });
+      let { error } = await supabase
+        .from('courses')
+        .upsert(courses.map((c) => buildCourseRow(userId, c, true, true)), { onConflict: 'id' });
+      if (error && isSchemaColumnError(error)) {
+        const retryWithoutArchive = await supabase
+          .from('courses')
+          .upsert(courses.map((c) => buildCourseRow(userId, c, true, false)), { onConflict: 'id' });
+        error = retryWithoutArchive.error;
+        if (error && isSchemaColumnError(error)) {
+          const retryCoreOnly = await supabase
+            .from('courses')
+            .upsert(courses.map((c) => buildCourseRow(userId, c, false, false)), { onConflict: 'id' });
+          error = retryCoreOnly.error;
+        }
+      }
       if (error) throw error;
       writeCache('courses', userId, courses);
       return { error: null };
@@ -1234,6 +1264,33 @@ export const DBService = {
         // Don't leave an orphaned object behind
         await supabase.storage.from(usedBucket).remove([storagePath]).catch(() => {});
         throw insertError || new Error('Failed to save material record.');
+      }
+
+      // Server-side scan check to mark scan_status = 'clean' (or block & delete) via service_role
+      try {
+        const scanToken = await getAccessToken();
+        const scanRes = await fetch('/api/s3/scan', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(scanToken ? { Authorization: `Bearer ${scanToken}` } : {})
+          },
+          body: JSON.stringify({
+            key: storagePath,
+            bucket: usedBucket,
+            fileName: file.name,
+            materialId: row.id
+          })
+        });
+        if (scanRes.status === 400) {
+          const scanErr = await scanRes.json().catch(() => ({}));
+          await supabase.from('group_materials').delete().eq('id', row.id);
+          throw new Error(scanErr.error || 'File failed security verification and was blocked.');
+        }
+      } catch (scanErr: any) {
+        if (scanErr?.message && /security|blocked|signature|archive|unsupported/i.test(scanErr.message)) {
+          throw scanErr;
+        }
       }
 
       // Activity feed entry
@@ -2477,6 +2534,31 @@ export const DBService = {
       if (uploadError) {
         console.error('Storage upload error across buckets:', uploadError);
         throw new Error(uploadError.message || 'File upload failed.');
+      }
+
+      try {
+        const fallbackToken = await getAccessToken();
+        const scanRes = await fetch('/api/s3/scan', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(fallbackToken ? { Authorization: `Bearer ${fallbackToken}` } : {})
+          },
+          body: JSON.stringify({
+            key: storagePath,
+            bucket: usedBucket,
+            fileName: file.name,
+            fileId
+          })
+        });
+        if (scanRes.status === 400) {
+          const scanErr = await scanRes.json().catch(() => ({}));
+          throw new Error(scanErr.error || 'File failed security verification and was blocked.');
+        }
+      } catch (scanCheckErr: any) {
+        if (scanCheckErr?.message && /security|blocked|signature|archive|unsupported/i.test(scanCheckErr.message)) {
+          throw scanCheckErr;
+        }
       }
     }
 

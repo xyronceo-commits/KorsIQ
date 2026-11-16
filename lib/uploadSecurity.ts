@@ -72,9 +72,14 @@ export async function inspectZipSafety(
       }
     }
 
-    // Block embedded VBA macro binaries
-    if (names.some((n) => /vbaProject\.bin$/i.test(n))) {
-      return { ok: false, error: 'Documents containing embedded VBA macros are blocked for security.' };
+    // Block embedded VBA macro binaries and executable/script payloads inside archives
+    if (
+      names.some((n) =>
+        /vbaProject\.bin$/i.test(n) ||
+        /\.(exe|dll|bat|cmd|ps1|vbs|js|msi|scr|hta)$/i.test(n)
+      )
+    ) {
+      return { ok: false, error: 'Documents containing macros or executable payloads are blocked for security.' };
     }
 
     let declaredTotal = 0;
@@ -99,14 +104,31 @@ export async function inspectZipSafety(
         }
       }
 
-      // Measure actual decompressed bytes for XML/text entries to defeat spoofed headers
-      if (/\.(xml|rels|txt)$/i.test(name)) {
-        const data: Uint8Array = await entry.async('uint8array');
-        actualTotal += data.byteLength;
-        if (actualTotal > MAX_ZIP_UNCOMPRESSED_BYTES) {
-          return { ok: false, error: 'Archive unpacked content exceeds the 50 MB safety limit.' };
-        }
-      }
+      // Stream-count actual decompressed bytes for ALL entries to defeat spoofed ZIP headers
+      await new Promise<void>((resolve, reject) => {
+        const stream = entry.internalStream('uint8array');
+        let settled = false;
+        stream.on('data', (chunk: Uint8Array) => {
+          actualTotal += chunk.byteLength;
+          if (actualTotal > MAX_ZIP_UNCOMPRESSED_BYTES && !settled) {
+            settled = true;
+            reject(new Error('Archive unpacked content exceeds the 50 MB safety limit.'));
+          }
+        });
+        stream.on('end', () => {
+          if (!settled) {
+            settled = true;
+            resolve();
+          }
+        });
+        stream.on('error', (err: any) => {
+          if (!settled) {
+            settled = true;
+            reject(err);
+          }
+        });
+        stream.resume();
+      });
     }
 
     return { ok: true, entryCount: names.length, totalUncompressedBytes: Math.max(declaredTotal, actualTotal) };
