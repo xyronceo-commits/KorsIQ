@@ -70,6 +70,7 @@ export interface Course {
   caScore?: number;
   examWeight?: number;
   examDate?: string;
+  archivedAt?: string;
 }
 
 export interface NotificationSettings {
