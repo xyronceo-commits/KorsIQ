@@ -13,8 +13,7 @@ import {
 } from 'lucide-react';
 import { UserProfile, SubscriptionPlanType } from '../types';
 import { getAccessToken, getCurrentUserId } from '../lib/supabase';
-import { BETA_PLAN_LIMITS } from '../constants';
-import { KORSIQ_PLANS } from '../lib/plans';
+import { PLANS, getPlanConfig, getPlanDisplayName } from '../lib/plans';
 
 interface SubscriptionCheckoutModalProps {
   isOpen: boolean;
@@ -80,7 +79,7 @@ export const SubscriptionCheckoutModal: React.FC<SubscriptionCheckoutModalProps>
 
   if (!isOpen) return null;
 
-  const planInfo = KORSIQ_PLANS[selectedPlan];
+  const planInfo = getPlanConfig(selectedPlan);
 
   const getHeaders = async () => {
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
@@ -196,7 +195,7 @@ export const SubscriptionCheckoutModal: React.FC<SubscriptionCheckoutModalProps>
       setStatusMessage({
         type: 'success',
         title: 'Subscription Activated!',
-        description: `Your account is now upgraded to ${data.tier === 'studio' ? 'KorsIQ Premium' : 'KorsIQ Plus'}. All features and limits are unlocked!`
+        description: `Your account is now upgraded to ${getPlanDisplayName(data.tier)}. All features and limits are unlocked!`
       });
       setStep('status');
     } catch (err: any) {
@@ -245,74 +244,53 @@ export const SubscriptionCheckoutModal: React.FC<SubscriptionCheckoutModalProps>
         {step === 'select' && (
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
-              {/* Plus Option */}
-              <button
-                type="button"
-                onClick={() => setSelectedPlan('plus')}
-                className={`p-4 rounded-xl border text-left cursor-pointer transition-all flex flex-col justify-between min-h-[140px] ${
-                  selectedPlan === 'plus'
-                    ? 'border-[#2563EB] bg-[#EFF6FF]/60 dark:bg-blue-950/30 ring-2 ring-[#2563EB]/20'
-                    : 'border-[#E5E7EB] dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
-                }`}
-              >
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-[#111827] dark:text-white">Plus</span>
-                    {selectedPlan === 'plus' && <Check size={14} className="text-[#2563EB]" />}
-                  </div>
-                  <p className="text-[11px] text-[#5B6472] dark:text-slate-400 mt-1">Study smarter. AI edge.</p>
-                </div>
-                <div className="pt-3">
-                  <span className="text-base font-bold text-[#111827] dark:text-white">₦7,500</span>
-                  <span className="text-[10px] text-[#5B6472]"> / month</span>
-                </div>
-              </button>
-
-              {/* Studio Option */}
-              <button
-                type="button"
-                onClick={() => setSelectedPlan('studio')}
-                className={`p-4 rounded-xl border text-left cursor-pointer transition-all flex flex-col justify-between min-h-[140px] relative ${
-                  selectedPlan === 'studio'
-                    ? 'border-[#2563EB] bg-[#EFF6FF]/60 dark:bg-blue-950/30 ring-2 ring-[#2563EB]/20'
-                    : 'border-[#E5E7EB] dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
-                }`}
-              >
-                <div className="absolute -top-2 right-3 px-1.5 py-0.2 bg-[#2563EB] text-white text-[9px] font-bold rounded">
-                  Recommended
-                </div>
-                <div>
-                  <div className="flex items-center justify-between">
-                    <span className="text-xs font-bold text-[#111827] dark:text-white">KorsIQ Premium</span>
-                    {selectedPlan === 'studio' && <Check size={14} className="text-[#2563EB]" />}
-                  </div>
-                  <p className="text-[11px] text-[#5B6472] dark:text-slate-400 mt-1">Full research &amp; writing suite.</p>
-                </div>
-                <div className="pt-3">
-                  <span className="text-base font-bold text-[#111827] dark:text-white">₦15,000</span>
-                  <span className="text-[10px] text-[#5B6472]"> / month</span>
-                </div>
-              </button>
+              {(['plus', 'studio'] as const).map((tierKey) => {
+                const p = PLANS[tierKey];
+                const isSelected = selectedPlan === tierKey;
+                return (
+                  <button
+                    key={tierKey}
+                    type="button"
+                    onClick={() => setSelectedPlan(tierKey)}
+                    className={`p-4 rounded-xl border text-left cursor-pointer transition-all flex flex-col justify-between min-h-[140px] relative ${
+                      isSelected
+                        ? 'border-[#2563EB] bg-[#EFF6FF]/60 dark:bg-blue-950/30 ring-2 ring-[#2563EB]/20'
+                        : 'border-[#E5E7EB] dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/40'
+                    }`}
+                  >
+                    {tierKey === 'studio' && (
+                      <div className="absolute -top-2 right-3 px-1.5 py-0.2 bg-[#2563EB] text-white text-[9px] font-bold rounded">
+                        Recommended
+                      </div>
+                    )}
+                    <div>
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-bold text-[#111827] dark:text-white">{p.displayName}</span>
+                        {isSelected && <Check size={14} className="text-[#2563EB]" />}
+                      </div>
+                      <p className="text-[11px] text-[#5B6472] dark:text-slate-400 mt-1">{p.tagline}</p>
+                    </div>
+                    <div className="pt-3">
+                      <span className="text-base font-bold text-[#111827] dark:text-white">{p.priceFormatted}</span>
+                      <span className="text-[10px] text-[#5B6472]"> / {p.periodLabel}</span>
+                    </div>
+                  </button>
+                );
+              })}
             </div>
 
             {/* Plan Highlights */}
             <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg space-y-2 border border-[#E5E7EB] dark:border-slate-800">
-              <span className="text-xs font-semibold text-[#111827] dark:text-white block">
-                {selectedPlan === 'studio' ? 'KorsIQ Premium package includes' : 'Plus package includes'}
+              <span className="text-[11px] font-bold text-[#111827] dark:text-white uppercase tracking-wider block">
+                {`${planInfo.displayName} Package Includes`}
               </span>
               <ul className="space-y-1.5 text-xs text-[#5B6472] dark:text-slate-300">
-                <li className="flex items-center gap-2">
-                  <Check size={13} className="text-[#2563EB] shrink-0" />
-                  <span>{selectedPlan === 'studio' ? 'Full Academic Studio workspace with real citations' : 'Lite Studio & AI study assistants'}</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check size={13} className="text-[#2563EB] shrink-0" />
-                  <span>{selectedPlan === 'studio' ? 'Word (.docx) & PDF manuscript direct export' : 'Scenario CGPA projections & all courses'}</span>
-                </li>
-                <li className="flex items-center gap-2">
-                  <Check size={13} className="text-[#2563EB] shrink-0" />
-                  <span>{selectedPlan === 'studio' ? '10 GB cloud storage & 200 monthly AI credits' : '2 GB cloud storage & 150 monthly AI credits'}</span>
-                </li>
+                {planInfo.features.slice(0, 4).map((feat) => (
+                  <li key={feat} className="flex items-center gap-2">
+                    <Check size={13} className="text-[#2563EB] shrink-0" />
+                    <span>{feat}</span>
+                  </li>
+                ))}
               </ul>
             </div>
 
@@ -329,7 +307,7 @@ export const SubscriptionCheckoutModal: React.FC<SubscriptionCheckoutModalProps>
               className="w-full py-2.5 bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-50 text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer shadow-xs min-h-[44px] transition-colors"
             >
               <Lock size={13} />
-              <span>{isProcessing ? 'Connecting...' : `Proceed to Pay ${planInfo.priceDisplay}`}</span>
+              <span>{isProcessing ? 'Connecting...' : `Proceed to Pay ${planInfo.priceFormatted} / ${planInfo.periodLabel}`}</span>
               <ArrowRight size={13} />
             </button>
 
@@ -353,11 +331,11 @@ export const SubscriptionCheckoutModal: React.FC<SubscriptionCheckoutModalProps>
           <div className="space-y-4">
             <div className="p-3.5 bg-blue-50 dark:bg-blue-950/40 border border-blue-200 dark:border-blue-900 rounded-lg space-y-2.5">
               <div className="flex items-center justify-between">
-                <span className="text-xs font-semibold text-[#2563EB]">
+                <span className="text-[10px] font-bold uppercase text-[#2563EB] tracking-wider">
                   Payment Verification
                 </span>
                 <span className="text-[11px] font-bold text-[#111827] dark:text-white uppercase">
-                  {selectedPlan === 'studio' ? 'KorsIQ Premium (₦15,000)' : 'Plus (₦7,500)'}
+                  {`${planInfo.displayName} (${planInfo.priceFormatted})`}
                 </span>
               </div>
 

@@ -21,6 +21,16 @@ import {
   getMonthlyCreditAllowance,
   getNormalizedCreditTier
 } from './lib/aiCredits';
+import {
+  BILLING_ENABLED,
+  FREE_BETA_LIMITS,
+  can,
+  checkLimit,
+  getMaxFileSizeBytes,
+  getPlanConfig,
+  getPlanDisplayName,
+  normalizePlanTier,
+} from './lib/plans';
 
 // Load .env for local development (hosting platforms inject real environment variables instead)
 try { process.loadEnvFile(); } catch { /* no .env file: rely on the environment */ }
@@ -478,6 +488,9 @@ export async function createExpressApp() {
   // Middleware to enforce paid feature tier access on the backend (Plus / Studio / Scholar / Sage)
   const requirePaidTier = (allowedTiers: string[] = ['plus', 'studio', 'scholar', 'sage']) => {
     return async (req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) => {
+      if (!BILLING_ENABLED) {
+        return next();
+      }
       const uid = req.user?.uid;
       if (!uid) {
         return res.status(401).json({ success: false, error: 'Unauthorized: Authentication required' });
@@ -644,6 +657,18 @@ export async function createExpressApp() {
 
     const failureReason = lastError?.message || 'Gemini API failed to generate a response';
     console.error('[Gemini AI Execution Fatal]:', { models: geminiCandidateModels, status: lastError?.status, reason: failureReason });
+    const lowerReason = String(failureReason).toLowerCase();
+    const isQuotaError =
+      lastError?.status === 429 ||
+      lowerReason.includes('429') ||
+      lowerReason.includes('quota') ||
+      lowerReason.includes('resource_exhausted') ||
+      lowerReason.includes('rate limit');
+    if (isQuotaError) {
+      const quotaErr: any = new Error('AI is busy right now. Please wait a moment and try again.');
+      quotaErr.status = 429;
+      throw quotaErr;
+    }
     throw new Error(`Gemini AI service error: ${failureReason}`);
   };
 
@@ -821,6 +846,9 @@ export async function createExpressApp() {
 
   // Initialize checkout transaction
   app.post('/api/subscription/initialize', requireAuth, apiRateLimiter, async (req: AuthenticatedRequest, res) => {
+    if (!BILLING_ENABLED) {
+      return res.status(410).json({ success: false, error: 'Payments are not open yet' });
+    }
     try {
       const { plan, billingCycle = 'monthly' } = req.body;
       const normalizedPlan = (plan === 'studio' || plan === 'sage' || plan === 'premium') ? 'studio' : 'plus';
@@ -938,6 +966,9 @@ export async function createExpressApp() {
 
   // Verify transaction status securely on the backend (also serves as manual receipt recovery endpoint)
   app.post('/api/subscription/verify', requireAuth, apiRateLimiter, async (req: AuthenticatedRequest, res) => {
+    if (!BILLING_ENABLED) {
+      return res.status(410).json({ success: false, error: 'Payments are not open yet' });
+    }
     try {
       const { reference } = req.body;
       let cleanRef = (typeof reference === 'string' ? reference.trim() : '').replace(/[^a-zA-Z0-9_-]/g, '');
@@ -1250,7 +1281,7 @@ export async function createExpressApp() {
         isPro: true,
         subscriptionStatus: 'active',
         currentPeriodEnd: endDate.toISOString(),
-        message: `Payment verified! Your account is now active on ${planTier === 'studio' ? 'KorsIQ Premium' : 'KorsIQ Plus'}.`
+        message: `Payment verified! Your account is now active on ${getPlanDisplayName(planTier)}.`
       });
     } catch (err: any) {
       console.error('Verify subscription error:', err);
@@ -1567,6 +1598,101 @@ export async function createExpressApp() {
     }
   });
 
+  async function getUserPlanTier(uid: string) {
+    if (!supabaseAdmin || !uid) return normalizePlanTier('free');
+    const { data } = await supabaseAdmin
+      .from('profiles')
+      .select('subscription_tier')
+      .eq('id', uid)
+      .maybeSingle();
+    return normalizePlanTier(data?.subscription_tier);
+  }
+
+  function parseStoredFileBytes(rawSize: unknown): number {
+    if (typeof rawSize === 'number' && Number.isFinite(rawSize)) return Math.max(0, rawSize);
+    if (typeof rawSize !== 'string') return 0;
+    const match = rawSize.trim().match(/^([\d.]+)\s*(B|KB|MB|GB)?$/i);
+    if (!match) return 0;
+    const value = parseFloat(match[1]);
+    if (!Number.isFinite(value)) return 0;
+    const unit = (match[2] || 'B').toUpperCase();
+    if (unit === 'GB') return Math.round(value * 1024 * 1024 * 1024);
+    if (unit === 'MB') return Math.round(value * 1024 * 1024);
+    if (unit === 'KB') return Math.round(value * 1024);
+    return Math.round(value);
+  }
+
+  async function enforceUploadQuota(
+    uid: string,
+    incomingBytes: number
+  ): Promise<{ ok: true } | { ok: false; status: number; error: string }> {
+    const maxFileBytes = getMaxFileSizeBytes();
+    if (incomingBytes > maxFileBytes) {
+      return {
+        ok: false,
+        status: 413,
+        error: `File exceeds the ${FREE_BETA_LIMITS.maxFileSizeLabel} maximum file size.`,
+      };
+    }
+
+    if (!supabaseAdmin || !uid) return { ok: true };
+    const tier = await getUserPlanTier(uid);
+    const [personalRes, groupRes] = await Promise.all([
+      supabaseAdmin
+        .from('user_files')
+        .select('file_size, created_at')
+        .eq('user_id', uid),
+      supabaseAdmin
+        .from('group_materials')
+        .select('file_size_bytes, created_at')
+        .eq('uploader_id', uid),
+    ]);
+
+    let totalBytes = 0;
+    let monthlyCount = 0;
+    const nowMonth = new Date().toISOString().slice(0, 7);
+
+    if (!personalRes.error && personalRes.data) {
+      for (const f of personalRes.data) {
+        totalBytes += parseStoredFileBytes(f.file_size);
+        if (typeof f.created_at === 'string' && f.created_at.slice(0, 7) === nowMonth) {
+          monthlyCount += 1;
+        }
+      }
+    }
+
+    if (!groupRes.error && groupRes.data) {
+      for (const g of groupRes.data) {
+        totalBytes += Number(g.file_size_bytes) || 0;
+        if (typeof g.created_at === 'string' && g.created_at.slice(0, 7) === nowMonth) {
+          monthlyCount += 1;
+        }
+      }
+    }
+
+    const storageCheck = checkLimit({
+      tier,
+      resource: 'storageBytes',
+      currentCount: totalBytes,
+      incomingCount: Math.max(0, incomingBytes),
+    });
+    if (!storageCheck.allowed) {
+      return { ok: false, status: 403, error: storageCheck.blockMessage || 'Storage limit reached.' };
+    }
+
+    const uploadCheck = checkLimit({
+      tier,
+      resource: 'monthlyUploads',
+      currentCount: monthlyCount,
+      incomingCount: 1,
+    });
+    if (!uploadCheck.allowed) {
+      return { ok: false, status: 403, error: uploadCheck.blockMessage || 'Monthly upload limit reached.' };
+    }
+
+    return { ok: true };
+  }
+
   // Standard S3 Upload Proxy Route
   app.post('/api/s3/upload', requireAuth, requireS3Configured, apiRateLimiter, async (req: AuthenticatedRequest, res) => {
     try {
@@ -1603,6 +1729,11 @@ export async function createExpressApp() {
       const authz = await authorizeStorageObject(uid, fileKey, bucket, 'write');
       if (!authz.ok) return res.status(authz.status).json({ error: authz.error });
       bucket = authz.bucket;
+
+      if (uid) {
+        const quota = await enforceUploadQuota(uid, buffer.length);
+        if (quota.ok === false) return res.status(quota.status).json({ error: quota.error });
+      }
 
       const s3 = getS3();
       const contentType = fileType || 'application/octet-stream';
@@ -1663,6 +1794,10 @@ export async function createExpressApp() {
       const authz = await authorizeStorageObject(uid, fileKey, bucket, 'write');
       if (!authz.ok) return res.status(authz.status).json({ error: authz.error });
       bucket = authz.bucket;
+
+      const incomingBytes = Number(req.body?.fileSizeBytes) || 0;
+      const quota = await enforceUploadQuota(uid, incomingBytes);
+      if (quota.ok === false) return res.status(quota.status).json({ error: quota.error });
 
       const s3 = getS3();
       const contentType = typeof fileType === 'string' && fileType.trim() ? fileType.trim() : 'application/octet-stream';
@@ -2700,6 +2835,18 @@ Dr. Taylor: Exactly. Consistently testing yourself on key formulas and definitio
     requestId: string;
   }> {
     const reqId = (requestId && requestId.trim()) || `${feature}_${userId || 'anon'}_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    if (!BILLING_ENABLED) {
+      return {
+        success: true,
+        balance: 9999,
+        used: 0,
+        allowance: 9999,
+        required: 0,
+        periodEnd: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(),
+        requestId: reqId,
+      };
+    }
+
     const current = await getAiCreditBalanceForUser(userId);
 
     if (!supabaseAdmin || !userId || cost <= 0) {
@@ -2788,6 +2935,7 @@ Dr. Taylor: Exactly. Consistently testing yourself on key formulas and definitio
     cost: number,
     requestId: string
   ): Promise<void> {
+    if (!BILLING_ENABLED) return;
     if (!supabaseAdmin || !userId || !requestId || cost <= 0) return;
 
     try {
@@ -2829,7 +2977,61 @@ Dr. Taylor: Exactly. Consistently testing yourself on key formulas and definitio
     return res.json(summary);
   });
 
+  const dailyAiRequestsFallback = new Map<string, number>();
+
+  const aiBackstopMiddleware = async (req: AuthenticatedRequest, res: express.Response, next: express.NextFunction) => {
+    if (cleanEnvKey('AI_DISABLED').toLowerCase() === 'true') {
+      return res.status(503).json({
+        success: false,
+        error: 'AI is temporarily unavailable',
+      });
+    }
+
+    const uid = req.user?.uid;
+    const feature = (req.originalUrl || req.path || 'ai').split('?')[0];
+    const todayKey = new Date().toISOString().slice(0, 10);
+    const todayStartIso = `${todayKey}T00:00:00.000Z`;
+    const fallbackKey = `${uid || 'anon'}:${todayKey}`;
+
+    if (!BILLING_ENABLED && uid) {
+      let todayCount = dailyAiRequestsFallback.get(fallbackKey) || 0;
+      if (supabaseAdmin) {
+        try {
+          const { count, error } = await supabaseAdmin
+            .from('ai_action_logs')
+            .select('id', { count: 'exact', head: true })
+            .eq('user_id', uid)
+            .gte('created_at', todayStartIso);
+          if (!error && typeof count === 'number') {
+            todayCount = Math.max(todayCount, count);
+          }
+        } catch {}
+      }
+
+      if (todayCount >= FREE_BETA_LIMITS.dailyAiRequestsLimit) {
+        return res.status(429).json({
+          success: false,
+          error: "You've reached today's limit. It resets tomorrow.",
+        });
+      }
+      dailyAiRequestsFallback.set(fallbackKey, todayCount + 1);
+    }
+
+    if (supabaseAdmin && uid) {
+      // Non-blocking usage log for beta traction & billing-switch decision
+      Promise.resolve(
+        supabaseAdmin.from('ai_action_logs').insert({
+          user_id: uid,
+          feature,
+        })
+      ).catch(() => {});
+    }
+
+    next();
+  };
+
   // Magic Import
+  app.use(['/api/ai', '/api/scolaris', '/api/vision/scan', '/api/podcast/generate'], requireAuth, aiBackstopMiddleware);
   app.post('/api/ai/import', requireAuth, apiRateLimiter, async (req, res) => {
     const { text } = req.body;
     try {
@@ -4039,6 +4241,13 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
 
       if (!buffer) {
         return res.status(400).json({ success: false, error: 'Either storagePath or contentBase64 is required.' });
+      }
+
+      if (buffer.length > getMaxFileSizeBytes()) {
+        return res.status(413).json({
+          success: false,
+          error: `File exceeds the ${FREE_BETA_LIMITS.maxFileSizeLabel} maximum file size.`
+        });
       }
 
       const result = await extractDocumentWithOcrFallback(buffer, fileName || 'document', fileType || '');
@@ -5279,12 +5488,29 @@ Generate a comprehensive exam simulation with 8 questions from the provided text
   app.get('/api/admin/overview', requireAdminAuth, async (_req, res) => {
     if (!supabaseAdmin) return res.status(503).json({ success: false, error: 'Database service unavailable.' });
     try {
-      const [profilesRes, subsRes, groupsRes, pendingTxRes, recentLogs] = await Promise.all([
+      const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+      const [
+        profilesRes,
+        subsRes,
+        groupsRes,
+        pendingTxRes,
+        recentLogs,
+        courses7dRes,
+        userFiles7dRes,
+        groupMaterials7dRes,
+        aiLogs7dRes,
+        studioDocs7dRes
+      ] = await Promise.all([
         supabaseAdmin.from('profiles').select('id', { count: 'exact', head: true }),
         supabaseAdmin.from('subscriptions').select('id, amount_paid, status, created_at').eq('status', 'active'),
         supabaseAdmin.from('study_groups').select('id', { count: 'exact', head: true }),
         supabaseAdmin.from('payment_transactions').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
-        fetchAdminAuditLogs(10)
+        fetchAdminAuditLogs(10),
+        supabaseAdmin.from('courses').select('user_id').gte('created_at', sevenDaysAgo),
+        supabaseAdmin.from('user_files').select('user_id').gte('created_at', sevenDaysAgo),
+        supabaseAdmin.from('group_materials').select('uploader_id').gte('created_at', sevenDaysAgo),
+        supabaseAdmin.from('ai_action_logs').select('user_id').gte('created_at', sevenDaysAgo),
+        supabaseAdmin.from('academic_documents').select('user_id').gte('updated_at', sevenDaysAgo)
       ]);
 
       const now = new Date();
@@ -5293,15 +5519,31 @@ Generate a comprehensive exam simulation with 8 questions from the provided text
         .filter((s: any) => s.created_at >= firstOfMonth)
         .reduce((sum: number, s: any) => sum + (Number(s.amount_paid) || 0), 0);
 
+      const activeUserIds = new Set<string>();
+      for (const r of courses7dRes.data || []) if (r.user_id) activeUserIds.add(String(r.user_id));
+      for (const r of userFiles7dRes.data || []) if (r.user_id) activeUserIds.add(String(r.user_id));
+      for (const r of groupMaterials7dRes.data || []) if (r.uploader_id) activeUserIds.add(String(r.uploader_id));
+      for (const r of aiLogs7dRes.data || []) if (r.user_id) activeUserIds.add(String(r.user_id));
+      for (const r of studioDocs7dRes.data || []) if (r.user_id) activeUserIds.add(String(r.user_id));
+
       res.json({
         success: true,
         data: {
+          billingEnabled: BILLING_ENABLED,
           totalUsers: profilesRes.count || 0,
           activeSubscriptions: subsRes.data?.length || 0,
           monthRevenue,
           totalCircles: groupsRes.count || 0,
           pendingPayments: pendingTxRes.count || 0,
-          recentLogs
+          recentLogs,
+          traction: {
+            totalSignups: profilesRes.count || 0,
+            activeUsers7d: activeUserIds.size,
+            goal: 15,
+            coursesCreated7d: (courses7dRes.data || []).length,
+            filesUploaded7d: (userFiles7dRes.data || []).length + (groupMaterials7dRes.data || []).length,
+            aiActions7d: (aiLogs7dRes.data || []).length,
+          }
         }
       });
     } catch (err: any) {
@@ -5775,6 +6017,33 @@ Generate a comprehensive exam simulation with 8 questions from the provided text
 
       // Security: enforce ownerId from authenticated session to prevent spoofing
       const ownerId = req.user!.uid;
+      if (supabaseAdmin) {
+        const tier = await getUserPlanTier(ownerId);
+        const plan = getPlanConfig(tier);
+        const { count: ownedCount } = await supabaseAdmin
+          .from('study_groups')
+          .select('id', { count: 'exact', head: true })
+          .eq('owner_id', ownerId);
+
+        const createCheck = checkLimit({
+          tier,
+          resource: 'circlesCreate',
+          currentCount: ownedCount || 0,
+          incomingCount: 1,
+        });
+        if (!createCheck.allowed) {
+          return res.status(403).json({
+            success: false,
+            error: createCheck.blockMessage || 'Circle creation limit reached for your plan.',
+          });
+        }
+        if (type !== 'general' && !can('privateCircles', tier)) {
+          return res.status(403).json({
+            success: false,
+            error: `Private circles with invite codes require ${getPlanConfig('plus').displayName} or ${getPlanConfig('studio').displayName}.`,
+          });
+        }
+      }
       const userEmail = req.user?.email || '';
       const fallbackName = userEmail ? userEmail.split('@')[0] : 'Circle Creator';
       const effectiveOwnerName = (typeof ownerName === 'string' && ownerName.trim()) || fallbackName;
@@ -6074,6 +6343,24 @@ Generate a comprehensive exam simulation with 8 questions from the provided text
       const isPrivate = group.type === 'private' || group.visibility === 'private';
 
       if (!isMember) {
+        const tier = await getUserPlanTier(userId);
+        const { count: joinedCount } = await supabaseAdmin
+          .from('circle_members')
+          .select('circle_id', { count: 'exact', head: true })
+          .eq('user_id', userId);
+        const joinCheck = checkLimit({
+          tier,
+          resource: 'circlesJoin',
+          currentCount: joinedCount || 0,
+          incomingCount: 1,
+        });
+        if (!joinCheck.allowed) {
+          return res.status(403).json({
+            success: false,
+            error: joinCheck.blockMessage || 'Circle join limit reached for your plan.',
+          });
+        }
+
         if (isPrivate) {
           const supplied = String(code || '').trim().toUpperCase();
           if (!supplied || (group.invite_code || '').toUpperCase() !== supplied) {

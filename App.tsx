@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Course, UserProfile, StudySession, AppState, StudyHubData, StudyGroup, AppNotification } from './types';
 import { ICONS } from './constants';
+import { BILLING_ENABLED, getPlanDisplayName } from './lib/plans';
 import { GraduationCap, Menu, X, Lock, Sun, Moon, CheckCheck, Trash2 } from 'lucide-react';
 import Onboarding from './components/Onboarding';
 import LandingPage from './components/LandingPage';
@@ -151,6 +152,7 @@ const App: React.FC = () => {
     } catch {}
 
     setActiveTab('settings');
+    if (!BILLING_ENABLED) return;
     setPaymentReturnBanner({
       status: 'verifying',
       message: 'Verifying your payment with Paystack...'
@@ -207,7 +209,7 @@ const App: React.FC = () => {
               });
             }
 
-            const planLabel = resolvedTier === 'studio' ? 'KorsIQ Premium' : 'KorsIQ Plus';
+            const planLabel = getPlanDisplayName(resolvedTier);
             const renewLabel = resolvedEnd
               ? ` (renews ${new Date(resolvedEnd).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })})`
               : '';

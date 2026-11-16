@@ -13,7 +13,7 @@ import { getCurrentUserId } from '../lib/supabase';
 import KorsIQLogo from './KorsIQLogo';
 import UniversitySelector from './UniversitySelector';
 import SubscriptionCheckoutModal from './SubscriptionCheckoutModal';
-import { KORSIQ_PLANS } from '../lib/plans';
+import { BILLING_ENABLED, PLANS, PLAN_ORDER } from '../lib/plans';
 
 interface OnboardingProps {
   userEmail: string;
@@ -127,9 +127,17 @@ export const Onboarding: React.FC<OnboardingProps> = ({
         };
         await DBService.addCourse(userId, newCourse);
       }
+      if (!BILLING_ENABLED) {
+        handleFinishOnboarding();
+        return;
+      }
       setStep(3);
     } catch (err) {
       console.error('Error saving courses during onboarding:', err);
+      if (!BILLING_ENABLED) {
+        handleFinishOnboarding();
+        return;
+      }
       // Non-blocking, advance to step 3
       setStep(3);
     } finally {
@@ -171,7 +179,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({
       {/* Top Header: Logo left, Skip right for steps 1 and 2 */}
       <div className="w-full max-w-xl flex items-center justify-between pb-6">
         <KorsIQLogo size={28} />
-        {step < 3 && (
+        {((BILLING_ENABLED && step < 3) || (!BILLING_ENABLED && step < 2)) && (
           <button
             type="button"
             onClick={() => {
@@ -186,17 +194,21 @@ export const Onboarding: React.FC<OnboardingProps> = ({
       </div>
 
       <div className="w-full max-w-xl space-y-6">
-        {/* Simple 3-Segment Progress Bar per Spec: Profile, Courses, Plan */}
+        {/* Progress Bar: 2 segments (Profile, Courses) when billing is off, 3 when billing is on */}
         <div className="space-y-2">
-          <div className="grid grid-cols-3 gap-2">
+          <div className={`grid ${BILLING_ENABLED ? 'grid-cols-3' : 'grid-cols-2'} gap-2`}>
             <div className={`h-1.5 rounded-full ${step >= 1 ? 'bg-[#2563EB]' : 'bg-[#E5E7EB] dark:bg-slate-800'}`} />
             <div className={`h-1.5 rounded-full ${step >= 2 ? 'bg-[#2563EB]' : 'bg-[#E5E7EB] dark:bg-slate-800'}`} />
-            <div className={`h-1.5 rounded-full ${step >= 3 ? 'bg-[#2563EB]' : 'bg-[#E5E7EB] dark:bg-slate-800'}`} />
+            {BILLING_ENABLED && (
+              <div className={`h-1.5 rounded-full ${step >= 3 ? 'bg-[#2563EB]' : 'bg-[#E5E7EB] dark:bg-slate-800'}`} />
+            )}
           </div>
           <div className="flex justify-between text-[11px] font-semibold text-[#5B6472]">
             <span className={step >= 1 ? 'text-[#2563EB]' : ''}>Profile</span>
             <span className={step >= 2 ? 'text-[#2563EB]' : ''}>Courses</span>
-            <span className={step >= 3 ? 'text-[#2563EB]' : ''}>Plan</span>
+            {BILLING_ENABLED && (
+              <span className={step >= 3 ? 'text-[#2563EB]' : ''}>Plan</span>
+            )}
           </div>
         </div>
 
@@ -389,7 +401,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({
 
               <button
                 type="button"
-                onClick={() => setStep(3)}
+                onClick={() => (BILLING_ENABLED ? setStep(3) : handleFinishOnboarding())}
                 className="text-xs font-semibold text-[#5B6472] hover:text-[#111827] cursor-pointer min-h-[44px] px-2 flex items-center"
               >
                 I'll add courses later
@@ -403,7 +415,13 @@ export const Onboarding: React.FC<OnboardingProps> = ({
                 onClick={handleSaveCourses}
                 className="w-full py-2.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 min-h-[44px] cursor-pointer shadow-sm disabled:opacity-50"
               >
-                <span>{isSubmitting ? 'Saving courses...' : 'Save and continue'}</span>
+                <span>
+                  {isSubmitting
+                    ? 'Saving courses...'
+                    : BILLING_ENABLED
+                      ? 'Save and continue'
+                      : 'Save and finish'}
+                </span>
                 <ArrowRight size={14} />
               </button>
             </div>
@@ -413,7 +431,7 @@ export const Onboarding: React.FC<OnboardingProps> = ({
         {/* ========================================================= */}
         {/* STEP 3: Choose a Plan                                     */}
         {/* ========================================================= */}
-        {step === 3 && (
+        {BILLING_ENABLED && step === 3 && (
           <div className="space-y-5">
             <div className="text-center space-y-1">
               <h1 className="text-xl font-bold text-[#111827] dark:text-white">Pick the plan that fits your semester</h1>
@@ -424,126 +442,70 @@ export const Onboarding: React.FC<OnboardingProps> = ({
 
             {/* Three plan cards side by side (stacked on mobile) */}
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {/* Card 1: Free */}
-              <div
-                className={`bg-white dark:bg-slate-900 rounded-lg p-5 border flex flex-col justify-between space-y-4 transition-all shadow-xs ${
-                  selectedPlan === 'free'
-                    ? 'border-[#2563EB] ring-2 ring-[#2563EB]/20'
-                    : 'border-[#E5E7EB] dark:border-slate-800'
-                }`}
-              >
-                <div className="space-y-3">
-                  <div>
-                    <h3 className="font-bold text-base text-[#111827] dark:text-white">Free</h3>
-                    <p className="text-xs text-[#5B6472] mt-0.5">{KORSIQ_PLANS.free.description}</p>
-                  </div>
-                  <div>
-                    <span className="text-2xl font-bold text-[#111827] dark:text-white">{KORSIQ_PLANS.free.priceDisplay}</span>
-                    <span className="text-xs text-[#5B6472]"> / month</span>
-                  </div>
-                  <ul className="space-y-2 text-xs text-[#5B6472] pt-2 border-t border-[#E5E7EB] dark:border-slate-800">
-                    {KORSIQ_PLANS.free.features.map((feat, idx) => (
-                      <li key={idx} className="flex items-center gap-2">
-                        <Check size={14} className="text-[#2563EB] shrink-0" />
-                        <span>{feat}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
+              {PLAN_ORDER.map((tierKey) => {
+                const plan = PLANS[tierKey];
+                const isSelected = selectedPlan === tierKey;
+                const isCurrent = userTier === tierKey;
+                return (
+                  <div
+                    key={tierKey}
+                    className={`bg-white dark:bg-slate-900 rounded-lg p-5 border flex flex-col justify-between space-y-4 transition-all shadow-xs relative ${
+                      isSelected
+                        ? 'border-[#2563EB] ring-2 ring-[#2563EB]/20'
+                        : 'border-[#E5E7EB] dark:border-slate-800'
+                    }`}
+                  >
+                    {tierKey === 'plus' && (
+                      <div className="absolute -top-2.5 right-4 px-2 py-0.5 bg-[#2563EB] text-white text-[10px] font-bold uppercase rounded tracking-wider">
+                        Popular
+                      </div>
+                    )}
+                    <div className="space-y-3">
+                      <div>
+                        <h3 className="font-bold text-base text-[#111827] dark:text-white">{plan.displayName}</h3>
+                        <p className="text-xs text-[#5B6472] mt-0.5">{plan.tagline}</p>
+                      </div>
+                      <div>
+                        <span className="text-2xl font-bold text-[#111827] dark:text-white">{plan.priceFormatted}</span>
+                        <span className="text-xs text-[#5B6472]"> / {plan.periodLabel}</span>
+                      </div>
+                      <ul className="space-y-2 text-xs text-[#5B6472] pt-2 border-t border-[#E5E7EB] dark:border-slate-800">
+                        {plan.features.map((feat) => (
+                          <li key={feat} className="flex items-start gap-2">
+                            <Check size={14} className="text-[#2563EB] shrink-0 mt-0.5" />
+                            <span>{feat}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
 
-                <button
-                  type="button"
-                  onClick={() => setSelectedPlan('free')}
-                  className={`w-full py-2.5 rounded-lg text-xs font-semibold cursor-pointer min-h-[44px] transition-colors ${
-                    selectedPlan === 'free'
-                      ? 'bg-[#2563EB] text-white hover:bg-[#1D4ED8]'
-                      : 'border border-[#E5E7EB] text-[#111827] hover:bg-slate-50'
-                  }`}
-                >
-                  Continue with Free
-                </button>
-              </div>
-
-              {/* Card 2: Plus */}
-              <div
-                className={`bg-white dark:bg-slate-900 rounded-lg p-5 border flex flex-col justify-between space-y-4 transition-all shadow-xs relative ${
-                  selectedPlan === 'plus'
-                    ? 'border-[#2563EB] ring-2 ring-[#2563EB]/20'
-                    : 'border-[#E5E7EB] dark:border-slate-800'
-                }`}
-              >
-                <div className="absolute -top-2.5 right-4 px-2 py-0.5 bg-[#2563EB] text-white text-xs font-semibold rounded">
-                  Popular
-                </div>
-                <div className="space-y-3">
-                  <div>
-                    <h3 className="font-bold text-base text-[#111827] dark:text-white">Plus</h3>
-                    <p className="text-xs text-[#5B6472] mt-0.5">{KORSIQ_PLANS.plus.description}</p>
+                    {tierKey === 'free' ? (
+                      <button
+                        type="button"
+                        onClick={() => setSelectedPlan('free')}
+                        className={`w-full py-2.5 rounded-lg text-xs font-semibold cursor-pointer min-h-[44px] transition-colors ${
+                          isSelected
+                            ? 'bg-[#2563EB] text-white hover:bg-[#1D4ED8]'
+                            : 'border border-[#E5E7EB] text-[#111827] hover:bg-slate-50'
+                        }`}
+                      >
+                        Continue with {plan.displayName}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCheckoutPlan(tierKey);
+                          setCheckoutModalOpen(true);
+                        }}
+                        className="w-full py-2.5 border border-[#E5E7EB] hover:bg-slate-50 text-[#111827] dark:text-white rounded-lg text-xs font-semibold cursor-pointer min-h-[44px]"
+                      >
+                        {isCurrent ? `${plan.displayName} Plan Active` : `Choose ${plan.displayName}`}
+                      </button>
+                    )}
                   </div>
-                  <div>
-                    <span className="text-2xl font-bold text-[#111827] dark:text-white">{KORSIQ_PLANS.plus.priceDisplay}</span>
-                    <span className="text-xs text-[#5B6472]"> / month</span>
-                  </div>
-                  <ul className="space-y-2 text-xs text-[#5B6472] pt-2 border-t border-[#E5E7EB] dark:border-slate-800">
-                    {KORSIQ_PLANS.plus.features.map((feat, idx) => (
-                      <li key={idx} className="flex items-center gap-2">
-                        <Check size={14} className="text-[#2563EB] shrink-0" />
-                        <span>{feat}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCheckoutPlan('plus');
-                    setCheckoutModalOpen(true);
-                  }}
-                  className="w-full py-2.5 border border-[#E5E7EB] hover:bg-slate-50 text-[#111827] dark:text-white rounded-lg text-xs font-semibold cursor-pointer min-h-[44px]"
-                >
-                  {userTier === 'plus' ? 'Plus Plan Active' : 'Choose Plus'}
-                </button>
-              </div>
-
-              {/* Card 3: KorsIQ Premium (Renamed from Academic Studio) */}
-              <div
-                className={`bg-white dark:bg-slate-900 rounded-lg p-5 border flex flex-col justify-between space-y-4 transition-all shadow-xs ${
-                  selectedPlan === 'studio'
-                    ? 'border-[#2563EB] ring-2 ring-[#2563EB]/20'
-                    : 'border-[#E5E7EB] dark:border-slate-800'
-                }`}
-              >
-                <div className="space-y-3">
-                  <div>
-                    <h3 className="font-bold text-base text-[#111827] dark:text-white">KorsIQ Premium</h3>
-                    <p className="text-xs text-[#5B6472] mt-0.5">{KORSIQ_PLANS.studio.description}</p>
-                  </div>
-                  <div>
-                    <span className="text-2xl font-bold text-[#111827] dark:text-white">{KORSIQ_PLANS.studio.priceDisplay}</span>
-                    <span className="text-xs text-[#5B6472]"> / month</span>
-                  </div>
-                  <ul className="space-y-2 text-xs text-[#5B6472] pt-2 border-t border-[#E5E7EB] dark:border-slate-800">
-                    {KORSIQ_PLANS.studio.features.map((feat, idx) => (
-                      <li key={idx} className="flex items-center gap-2">
-                        <Check size={14} className="text-[#2563EB] shrink-0" />
-                        <span>{feat}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-
-                <button
-                  type="button"
-                  onClick={() => {
-                    setCheckoutPlan('studio');
-                    setCheckoutModalOpen(true);
-                  }}
-                  className="w-full py-2.5 border border-[#E5E7EB] hover:bg-slate-50 text-[#111827] dark:text-white rounded-lg text-xs font-semibold cursor-pointer min-h-[44px]"
-                >
-                  {userTier === 'studio' ? 'KorsIQ Premium Active' : 'Choose Premium'}
-                </button>
-              </div>
+                );
+              })}
             </div>
 
             {/* Single Primary Action Button below cards per Spec */}

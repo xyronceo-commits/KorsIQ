@@ -1,7 +1,16 @@
 import React, { useState, useEffect } from 'react';
 import { UserProfile, UserFile } from '../types';
-import { ICONS, BETA_PLAN_LIMITS } from '../constants';
-import { KORSIQ_PLANS } from '../lib/plans';
+import { ICONS } from '../constants';
+import {
+  BILLING_ENABLED,
+  PLANS,
+  PLAN_ORDER,
+  getPlanConfig,
+  getNextPlanTier,
+  checkLimit,
+  formatStorageBytes,
+  SUPPORT_CONTACT_EMAIL,
+} from '../lib/plans';
 import { UserAvatar, AVATAR_OPTIONS } from './UserAvatar';
 import { DBService } from '../services/db';
 import { getCurrentUserId, getAccessToken, supabase } from '../lib/supabase';
@@ -38,6 +47,9 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
   const [checkoutPlan, setCheckoutPlan] = useState<'plus' | 'studio'>('plus');
   const [checkoutInitialStep, setCheckoutInitialStep] = useState<'select' | 'confirm'>('select');
   const [userFiles, setUserFiles] = useState<UserFile[]>([]);
+  const [activeCoursesCount, setActiveCoursesCount] = useState<number>(0);
+  const [circlesCreatedCount, setCirclesCreatedCount] = useState<number>(0);
+  const [circlesJoinedCount, setCirclesJoinedCount] = useState<number>(0);
   const [isLoadingFiles, setIsLoadingFiles] = useState(true);
   const [aiCreditsUsed, setAiCreditsUsed] = useState<number>(0);
   const [aiPeriodEnd, setAiPeriodEnd] = useState<string>(() => {
@@ -80,6 +92,23 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
       .finally(() => {
         setIsLoadingFiles(false);
       });
+
+    DBService.getCourses(uid)
+      .then((list) => {
+        setActiveCoursesCount(list.filter((c) => !c.archivedAt).length);
+      })
+      .catch(() => {});
+
+    DBService.getGroups(uid)
+      .then((groups) => {
+        const created = groups.filter((g) => g.ownerId === uid).length;
+        const joined = groups.filter((g) => g.members?.some((m) => (typeof m === 'string' ? m === uid : m.userId === uid))).length;
+        setCirclesCreatedCount(created);
+        setCirclesJoinedCount(joined);
+      })
+      .catch(() => {});
+
+    if (!BILLING_ENABLED) return;
 
     // Fetch real AI credit balance & usage for the current billing period
     const loadAiCreditsUsage = async () => {
@@ -217,9 +246,16 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
     : (rawTier === 'plus' || rawTier === 'scholar') 
     ? 'plus' 
     : 'free';
-  const currentPlan = BETA_PLAN_LIMITS[planKey] || BETA_PLAN_LIMITS.free;
-  const storageLimitMB = (currentPlan.storageLimitBytes / (1024 * 1024)).toFixed(0);
-  const storagePercent = Math.min(100, Math.round((totalStorageBytes / currentPlan.storageLimitBytes) * 100));
+  const currentPlan = getPlanConfig(planKey);
+  const nextTier = getNextPlanTier(planKey);
+  const nextPlan = nextTier ? getPlanConfig(nextTier) : null;
+  const courseMeter = checkLimit({ tier: planKey, resource: 'courses', currentCount: activeCoursesCount });
+  const storageMeter = checkLimit({ tier: planKey, resource: 'storageBytes', currentCount: totalStorageBytes });
+  const circleCreateMeter = checkLimit({ tier: planKey, resource: 'circlesCreate', currentCount: circlesCreatedCount });
+  const circleJoinMeter = checkLimit({ tier: planKey, resource: 'circlesJoin', currentCount: circlesJoinedCount });
+  const uploadMeter = checkLimit({ tier: planKey, resource: 'monthlyUploads', currentCount: uploadsThisMonth });
+  const effectiveStorageLimit = storageMeter.limit ?? currentPlan.storageLimitBytes;
+  const storagePercent = Math.min(100, Math.round((totalStorageBytes / Math.max(1, effectiveStorageLimit)) * 100));
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300 pb-20 max-w-4xl mx-auto font-sans text-[#111827] dark:text-white">
@@ -228,7 +264,11 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
         <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
           <div>
             <h1 className="text-xl font-bold text-[#111827] dark:text-white">Settings</h1>
-            <p className="text-xs text-[#5B6472]">Manage your plan, academic identity, and preferences</p>
+            <p className="text-xs text-[#5B6472]">
+              {BILLING_ENABLED
+                ? 'Manage your plan, academic identity, and preferences'
+                : 'Manage your usage, academic identity, and preferences'}
+            </p>
           </div>
 
           {activeTab === 'identity' && (
@@ -258,7 +298,7 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
                 : 'text-[#5B6472] hover:text-[#111827] dark:hover:text-white'
             }`}
           >
-            Plan and usage
+            {BILLING_ENABLED ? 'Plan and usage' : 'Usage'}
           </button>
           <button
             type="button"
@@ -286,9 +326,94 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
       </div>
 
       {/* ========================================================= */}
-      {/* TAB 1: Plan and Usage (Spec: Screen 6)                    */}
+      {/* TAB 1: Usage (Free Beta) / Plan and Usage (Billing On)    */}
       {/* ========================================================= */}
-      {activeTab === 'plan' && (
+      {activeTab === 'plan' && !BILLING_ENABLED && (
+        <div className="space-y-6">
+          <div className="space-y-0.5">
+            <h2 className="text-base font-bold text-[#111827] dark:text-white">Usage</h2>
+            <p className="text-xs text-[#5B6472]">Your active courses, storage, and circles</p>
+          </div>
+
+          <div className="bg-white dark:bg-slate-900 p-5 rounded-lg border border-[#E5E7EB] dark:border-slate-800 shadow-xs space-y-5">
+            {/* Active Courses */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-[#111827] dark:text-white">Active courses</span>
+                <span className="text-[#5B6472]">{courseMeter.meterText}</span>
+              </div>
+              <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
+                <div
+                  className="bg-[#2563EB] h-full rounded-full transition-all duration-300"
+                  style={{ width: `${Math.min(100, Math.round((activeCoursesCount / Math.max(1, courseMeter.limit || 15)) * 100))}%` }}
+                />
+              </div>
+              {courseMeter.warningText && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400">{courseMeter.warningText}</p>
+              )}
+              {courseMeter.overLimitMessage && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400">{courseMeter.overLimitMessage}</p>
+              )}
+            </div>
+
+            {/* Storage */}
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <div className="flex items-center gap-2">
+                  <HardDrive size={15} className="text-[#2563EB]" />
+                  <span className="font-semibold text-[#111827] dark:text-white">Storage</span>
+                </div>
+                <span className="text-[#5B6472]">
+                  {isLoadingFiles ? 'Calculating...' : `${formatStorageBytes(totalStorageBytes)} of ${formatStorageBytes(effectiveStorageLimit)}`}
+                </span>
+              </div>
+              <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
+                <div
+                  className="bg-[#2563EB] h-full rounded-full transition-all duration-300"
+                  style={{ width: `${storagePercent}%` }}
+                />
+              </div>
+              {storageMeter.warningText && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400">{storageMeter.warningText}</p>
+              )}
+              {storageMeter.overLimitMessage && (
+                <p className="text-[11px] text-amber-600 dark:text-amber-400">{storageMeter.overLimitMessage}</p>
+              )}
+            </div>
+
+            {/* Circles */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t border-[#E5E7EB] dark:border-slate-800">
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-[#111827] dark:text-white">Circles created</span>
+                  <span className="text-[#5B6472]">{circleCreateMeter.meterText}</span>
+                </div>
+                <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
+                  <div
+                    className="bg-[#2563EB] h-full rounded-full transition-all duration-300"
+                    style={{ width: `${Math.min(100, Math.round((circlesCreatedCount / Math.max(1, circleCreateMeter.limit || 3)) * 100))}%` }}
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <span className="font-semibold text-[#111827] dark:text-white">Circles joined</span>
+                  <span className="text-[#5B6472]">{circleJoinMeter.meterText}</span>
+                </div>
+                <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
+                  <div
+                    className="bg-[#2563EB] h-full rounded-full transition-all duration-300"
+                    style={{ width: `${Math.min(100, Math.round((circlesJoinedCount / Math.max(1, circleJoinMeter.limit || 10)) * 100))}%` }}
+                  />
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'plan' && BILLING_ENABLED && (
         <div className="space-y-6">
           <div className="space-y-0.5">
             <h2 className="text-base font-bold text-[#111827] dark:text-white">Plan and usage</h2>
@@ -303,8 +428,8 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
               <div className="bg-white dark:bg-slate-900 p-5 rounded-lg border border-[#E5E7EB] dark:border-slate-800 shadow-xs space-y-4">
                 <div className="flex items-center justify-between pb-2 border-b border-[#E5E7EB] dark:border-slate-800">
                   <div className="space-y-0.5">
-                    <span className="text-xs font-semibold text-[#5B6472]">Current plan</span>
-                    <h3 className="text-lg font-bold text-[#111827] dark:text-white">{currentPlan.name}</h3>
+                    <span className="text-[10px] font-bold text-[#5B6472] uppercase tracking-wider">Current Plan</span>
+                    <h3 className="text-lg font-bold text-[#111827] dark:text-white">{currentPlan.displayName}</h3>
                   </div>
                   <button
                     type="button"
@@ -317,10 +442,19 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
 
                 <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
                   <div>
-                    <span className="text-2xl font-bold text-[#111827] dark:text-white">{currentPlan.price}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-lg font-bold text-[#111827] dark:text-white">{currentPlan.displayName}</span>
+                      <span className="px-2 py-0.5 text-[10px] font-semibold rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+                        {profile.subscriptionStatus || 'Active'}
+                      </span>
+                    </div>
+                    <span className="text-2xl font-bold text-[#111827] dark:text-white">
+                      {currentPlan.priceFormatted}
+                      {currentPlan.priceNaira > 0 ? ` / ${currentPlan.periodLabel}` : ''}
+                    </span>
                     {profile.isPro && profile.subscriptionEnd && (
                       <p className="text-[11px] font-medium text-emerald-700 dark:text-emerald-400 mt-1">
-                        Active · Renews {new Date(profile.subscriptionEnd).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
+                        Renews {new Date(profile.subscriptionEnd).toLocaleDateString(undefined, { month: 'short', day: 'numeric', year: 'numeric' })}
                       </p>
                     )}
                   </div>
@@ -328,31 +462,53 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
                     {currentPlan.tagline}
                   </p>
                 </div>
+
+                {/* Included on current plan */}
+                <ul className="grid grid-cols-1 sm:grid-cols-2 gap-1.5 pt-3 border-t border-[#E5E7EB] dark:border-slate-800 text-xs text-[#5B6472]">
+                  {currentPlan.features.map((feat) => (
+                    <li key={feat} className="flex items-center gap-1.5">
+                      <Check size={13} className="text-[#2563EB] shrink-0" />
+                      <span>{feat}</span>
+                    </li>
+                  ))}
+                </ul>
               </div>
 
-              {/* Storage Card */}
-              <div className="bg-white dark:bg-slate-900 p-5 rounded-lg border border-[#E5E7EB] dark:border-slate-800 shadow-xs space-y-3">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <HardDrive size={16} className="text-[#2563EB]" />
-                    <h3 className="font-bold text-sm text-[#111827] dark:text-white">Storage</h3>
+              {/* Usage Meters: Active Courses, Storage & Monthly Uploads */}
+              <div className="bg-white dark:bg-slate-900 p-5 rounded-lg border border-[#E5E7EB] dark:border-slate-800 shadow-xs space-y-4">
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-semibold text-[#111827] dark:text-white">Active courses</span>
+                    <span className="text-[#5B6472]">{courseMeter.meterText}</span>
                   </div>
-                  <span className="text-xs text-[#5B6472]">
-                    {totalStorageMB} MB of {storageLimitMB} MB (beta)
-                  </span>
+                  <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
+                    <div
+                      className="bg-[#2563EB] h-full rounded-full transition-all duration-300"
+                      style={{ width: `${Math.min(100, Math.round((activeCoursesCount / Math.max(1, currentPlan.maxCourses)) * 100))}%` }}
+                    />
+                  </div>
                 </div>
 
-                {/* Storage Meter Bar */}
-                <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
-                  <div 
-                    className="bg-[#2563EB] h-full rounded-full transition-all duration-300"
-                    style={{ width: `${storagePercent}%` }}
-                  />
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <HardDrive size={15} className="text-[#2563EB]" />
+                      <h3 className="font-semibold text-xs text-[#111827] dark:text-white">Storage</h3>
+                    </div>
+                    <span className="text-xs text-[#5B6472]">
+                      {totalStorageMB} MB of {currentPlan.storageLabel}
+                    </span>
+                  </div>
+                  <div className="w-full bg-slate-100 dark:bg-slate-800 h-2 rounded-full overflow-hidden">
+                    <div 
+                      className="bg-[#2563EB] h-full rounded-full transition-all duration-300"
+                      style={{ width: `${storagePercent}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-[#5B6472]">
+                    Monthly uploads: {uploadMeter.meterText}
+                  </p>
                 </div>
-
-                <p className="text-xs text-[#5B6472]">
-                  {uploadsThisMonth} upload{uploadsThisMonth === 1 ? '' : 's'} this month. Beta storage allowance.
-                </p>
               </div>
 
               {/* AI Credits Card (Backed by atomic ai_credit_ledger) */}
@@ -423,31 +579,46 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
               )}
             </div>
 
-            {/* Right Column (4 cols on desktop): Quiet Upgrade Card */}
+            {/* Right Column (4 cols on desktop): Next Plan & Downgrade Note */}
             <div className="lg:col-span-4 space-y-4">
               <div className="bg-white dark:bg-slate-900 p-5 rounded-lg border border-[#E5E7EB] dark:border-slate-800 shadow-xs space-y-4 flex flex-col justify-between h-full">
-                <div className="space-y-2">
-                  <span className="text-xs font-semibold text-[#2563EB]">
-                    Upgrade
+                <div className="space-y-3">
+                  <span className="text-[10px] font-bold text-[#2563EB] uppercase tracking-wider">
+                    {nextPlan ? `Next plan: ${nextPlan.displayName}` : 'Plan management'}
                   </span>
                   <h3 className="font-bold text-base text-[#111827] dark:text-white">
-                    Need more room to write?
+                    {nextPlan
+                      ? `${nextPlan.displayName} (${nextPlan.priceFormatted}/${nextPlan.periodLabel})`
+                      : `You are on ${currentPlan.displayName}`}
                   </h3>
-                  <p className="text-xs text-[#5B6472] leading-relaxed">
-                    Upgrade to Plus or KorsIQ Premium for dissertation tools, larger file allowances, real citation chips, and formatted Word (.docx) export.
-                  </p>
+                  {nextPlan ? (
+                    <ul className="space-y-1.5 text-xs text-[#5B6472]">
+                      {nextPlan.extrasOverPrevious.map((extra) => (
+                        <li key={extra} className="flex items-start gap-1.5">
+                          <Check size={13} className="text-[#2563EB] shrink-0 mt-0.5" />
+                          <span>{extra}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-[#5B6472] leading-relaxed">
+                      You have our highest plan limits and full Academic Studio exports.
+                    </p>
+                  )}
                 </div>
 
-                {/* Single Primary Button per Spec */}
-                <div className="pt-2">
+                <div className="space-y-2 pt-2">
                   <button
                     type="button"
                     onClick={() => setShowPlansModal(true)}
                     className="w-full py-2.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-1.5 min-h-[44px] cursor-pointer shadow-sm"
                   >
-                    <span>See plans</span>
+                    <span>{nextPlan ? `Compare plans & upgrade` : 'View all plans'}</span>
                     <ArrowRight size={14} />
                   </button>
+                  <p className="text-[11px] text-[#5B6472] leading-relaxed">
+                    Cancel or downgrade: your current paid period stays active until renewal ends, or email {SUPPORT_CONTACT_EMAIL}. Existing courses and files remain accessible.
+                  </p>
                 </div>
               </div>
             </div>
@@ -500,8 +671,8 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
             {/* Avatar Icon Picker */}
             {isEditing && (
               <div className="pt-4 border-t border-[#E5E7EB] dark:border-slate-800 space-y-2.5">
-                <label className="text-xs font-semibold text-[#5B6472] block">
-                  Profile icon
+                <label className="text-[10px] font-bold text-[#5B6472] uppercase tracking-wider block">
+                  Profile Icon
                 </label>
                 <div className="grid grid-cols-2 sm:grid-cols-4 md:grid-cols-8 gap-2.5">
                   {AVATAR_OPTIONS.map((opt) => {
@@ -531,11 +702,11 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 pt-1">
               <div className="space-y-1 p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-[#E5E7EB] dark:border-slate-800">
-                <p className="text-xs font-semibold text-[#5B6472]">Email address</p>
+                <p className="text-[9px] font-bold uppercase tracking-wider text-[#5B6472]">Email Address</p>
                 <p className="text-xs font-semibold text-[#111827] dark:text-white truncate">{profile.email}</p>
               </div>
               <div className="space-y-1 p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-[#E5E7EB] dark:border-slate-800">
-                <p className="text-xs font-semibold text-[#5B6472]">Department</p>
+                <p className="text-[9px] font-bold uppercase tracking-wider text-[#5B6472]">Department</p>
                 {isEditing ? (
                   <input
                     type="text"
@@ -549,7 +720,7 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
                 )}
               </div>
               <div className="space-y-1 p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-[#E5E7EB] dark:border-slate-800">
-                <p className="text-xs font-semibold text-[#5B6472]">Level of study</p>
+                <p className="text-[9px] font-bold uppercase tracking-wider text-[#5B6472]">Level of Study</p>
                 {isEditing ? (
                   <select 
                     value={editedProfile.level}
@@ -568,7 +739,7 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
                 )}
               </div>
               <div className="space-y-1 p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg border border-[#E5E7EB] dark:border-slate-800">
-                <p className="text-xs font-semibold text-[#5B6472]">Target CGPA</p>
+                <p className="text-[9px] font-bold uppercase tracking-wider text-[#5B6472]">Target CGPA</p>
                 {isEditing ? (
                   <input 
                     type="number"
@@ -634,7 +805,7 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
         <div className="space-y-6">
           {/* Notification Preferences */}
           <section className="space-y-2">
-            <h3 className="text-xs font-semibold text-[#5B6472]">Preferences</h3>
+            <h3 className="text-[10px] font-bold text-[#5B6472] uppercase tracking-wider">Preferences</h3>
             <div className="bg-white dark:bg-slate-900 p-5 rounded-lg border border-[#E5E7EB] dark:border-slate-800 shadow-xs space-y-4">
               {[
                 { id: 'messages', label: 'Group Messages', desc: 'Alerts for new discussions in study circles', value: profile.notifications?.messages ?? true },
@@ -713,7 +884,7 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
 
           {/* Account Actions */}
           <section className="space-y-2">
-            <h3 className="text-xs font-semibold text-[#5B6472]">Account actions</h3>
+            <h3 className="text-[10px] font-bold text-[#5B6472] uppercase tracking-wider">Account Actions</h3>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
               <button 
                 type="button"
@@ -756,7 +927,7 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
       {/* ========================================================= */}
       {/* MODAL 1: Choose a Plan (Spec: 3 cards, Free preselected)  */}
       {/* ========================================================= */}
-      {showPlansModal && (
+      {BILLING_ENABLED && showPlansModal && (
         <div className="fixed inset-0 bg-[#111827]/40 z-50 flex items-center justify-center p-4 overflow-y-auto">
           <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg max-w-3xl w-full p-6 space-y-5 shadow-xl text-left my-8">
             <div className="flex items-center justify-between pb-3 border-b border-[#E5E7EB] dark:border-slate-800">
@@ -786,105 +957,49 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              {/* Free Card */}
-              <div className="border border-[#2563EB] ring-2 ring-[#2563EB]/20 bg-white dark:bg-slate-900 rounded-lg p-5 flex flex-col justify-between space-y-4">
-                <div className="space-y-3">
-                  <div>
-                    <h4 className="font-bold text-base text-[#111827] dark:text-white">Free</h4>
-                    <p className="text-xs text-[#5B6472] mt-0.5">Get organized and start studying.</p>
+              {PLAN_ORDER.map((tierKey) => {
+                const plan = PLANS[tierKey];
+                const isCurrent = planKey === tierKey;
+                return (
+                  <div
+                    key={tierKey}
+                    className={`border ${isCurrent ? 'border-[#2563EB] ring-2 ring-[#2563EB]/20' : 'border-[#E5E7EB] dark:border-slate-800'} bg-white dark:bg-slate-900 rounded-lg p-5 flex flex-col justify-between space-y-4`}
+                  >
+                    <div className="space-y-3">
+                      <div>
+                        <h4 className="font-bold text-base text-[#111827] dark:text-white">{plan.displayName}</h4>
+                        <p className="text-xs text-[#5B6472] mt-0.5">{plan.tagline}</p>
+                      </div>
+                      <div>
+                        <span className="text-2xl font-bold text-[#111827] dark:text-white">{plan.priceFormatted}</span>
+                        <span className="text-xs text-[#5B6472]"> / {plan.periodLabel}</span>
+                      </div>
+                      <ul className="space-y-2 text-xs text-[#5B6472] pt-2 border-t border-[#E5E7EB] dark:border-slate-800">
+                        {plan.features.map((feature) => (
+                          <li key={feature} className="flex items-start gap-2">
+                            <Check size={14} className="text-[#2563EB] shrink-0 mt-0.5" />
+                            <span>{feature}</span>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={isCurrent}
+                      onClick={() => {
+                        setShowPlansModal(false);
+                        if (tierKey === 'free') return;
+                        setCheckoutPlan(tierKey);
+                        setCheckoutInitialStep('select');
+                        setShowCheckoutModal(true);
+                      }}
+                      className="w-full py-2.5 bg-[#2563EB] hover:bg-[#1D4ED8] disabled:bg-slate-200 disabled:text-slate-600 text-white rounded-lg text-xs font-semibold cursor-pointer min-h-[44px] transition-colors"
+                    >
+                      {isCurrent ? 'Current Plan' : tierKey === 'free' ? plan.displayName : `Upgrade to ${plan.displayName}`}
+                    </button>
                   </div>
-                  <div>
-                    <span className="text-2xl font-bold text-[#111827] dark:text-white">₦0</span>
-                    <span className="text-xs text-[#5B6472]"> / month</span>
-                  </div>
-                  <ul className="space-y-2 text-xs text-[#5B6472] pt-2 border-t border-[#E5E7EB] dark:border-slate-800">
-                    {KORSIQ_PLANS.free.features.map((feat, idx) => (
-                      <li key={idx} className="flex items-center gap-2">
-                        <Check size={14} className="text-[#2563EB] shrink-0" />
-                        <span>{feat}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setShowPlansModal(false)}
-                  className="w-full py-2.5 bg-[#2563EB] text-white rounded-lg text-xs font-semibold cursor-pointer min-h-[44px]"
-                >
-                  {planKey === 'free' ? 'Current Plan' : 'Free Plan'}
-                </button>
-              </div>
-
-              {/* Plus Card */}
-              <div className="border border-[#E5E7EB] dark:border-slate-800 bg-white dark:bg-slate-900 rounded-lg p-5 flex flex-col justify-between space-y-4 relative">
-                <div className="absolute -top-2.5 right-4 px-2 py-0.5 bg-[#2563EB] text-white text-xs font-semibold rounded">
-                  Popular
-                </div>
-                <div className="space-y-3">
-                  <div>
-                    <h4 className="font-bold text-base text-[#111827] dark:text-white">Plus</h4>
-                    <p className="text-xs text-[#5B6472] mt-0.5">{KORSIQ_PLANS.plus.description}</p>
-                  </div>
-                  <div>
-                    <span className="text-2xl font-bold text-[#111827] dark:text-white">{KORSIQ_PLANS.plus.priceDisplay}</span>
-                    <span className="text-xs text-[#5B6472]"> / month</span>
-                  </div>
-                  <ul className="space-y-2 text-xs text-[#5B6472] pt-2 border-t border-[#E5E7EB] dark:border-slate-800">
-                    {KORSIQ_PLANS.plus.features.map((feat, idx) => (
-                      <li key={idx} className="flex items-center gap-2">
-                        <Check size={14} className="text-[#2563EB] shrink-0" />
-                        <span>{feat}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowPlansModal(false);
-                    setCheckoutPlan('plus');
-                    setCheckoutInitialStep('select');
-                    setShowCheckoutModal(true);
-                  }}
-                  className="w-full py-2.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg text-xs font-semibold cursor-pointer min-h-[44px] transition-colors"
-                >
-                  {planKey === 'plus' ? 'Current Plan' : 'Upgrade to Plus'}
-                </button>
-              </div>
-
-              {/* KorsIQ Premium Card (Renamed from Academic Studio) */}
-              <div className="border border-[#E5E7EB] dark:border-slate-800 bg-white dark:bg-slate-900 rounded-lg p-5 flex flex-col justify-between space-y-4">
-                <div className="space-y-3">
-                  <div>
-                    <h4 className="font-bold text-base text-[#111827] dark:text-white">KorsIQ Premium</h4>
-                    <p className="text-xs text-[#5B6472] mt-0.5">{KORSIQ_PLANS.studio.description}</p>
-                  </div>
-                  <div>
-                    <span className="text-2xl font-bold text-[#111827] dark:text-white">{KORSIQ_PLANS.studio.priceDisplay}</span>
-                    <span className="text-xs text-[#5B6472]"> / month</span>
-                  </div>
-                  <ul className="space-y-2 text-xs text-[#5B6472] pt-2 border-t border-[#E5E7EB] dark:border-slate-800">
-                    {KORSIQ_PLANS.studio.features.map((feat, idx) => (
-                      <li key={idx} className="flex items-center gap-2">
-                        <Check size={14} className="text-[#2563EB] shrink-0" />
-                        <span>{feat}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setShowPlansModal(false);
-                    setCheckoutPlan('studio');
-                    setCheckoutInitialStep('select');
-                    setShowCheckoutModal(true);
-                  }}
-                  className="w-full py-2.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg text-xs font-semibold cursor-pointer min-h-[44px] transition-colors"
-                >
-                  {planKey === 'studio' ? 'Current Plan' : 'Upgrade to KorsIQ Premium'}
-                </button>
-              </div>
+                );
+              })}
             </div>
 
             {planKey === 'free' && Boolean(pendingCheckoutRef) && (
@@ -908,6 +1023,7 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
       )}
 
       {/* Subscription Checkout Modal */}
+      {BILLING_ENABLED && (
       <SubscriptionCheckoutModal
         isOpen={showCheckoutModal}
         onClose={() => {
@@ -923,9 +1039,10 @@ export const Profile: React.FC<ProfileProps> = ({ profile, setProfile, onSignOut
           setPendingCheckoutRef('');
         }}
       />
+      )}
 
       {/* Available Soon Modal per Open Decision 3 */}
-      {showAvailableSoon && (
+      {BILLING_ENABLED && showAvailableSoon && (
         <div className="fixed inset-0 bg-[#111827]/40 z-50 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg max-w-sm w-full p-6 space-y-4 shadow-xl text-left">
             <div className="space-y-1.5">

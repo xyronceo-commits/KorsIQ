@@ -3,6 +3,7 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   FileText,
   Plus,
+  BookOpen as Sparkles,
   BookOpen,
   ArrowRight,
   ArrowLeft,
@@ -19,6 +20,7 @@ import {
   ChevronRight,
   ChevronDown,
   Layers,
+  Edit3 as Wand2,
   RefreshCw,
   Sliders,
   Check,
@@ -33,12 +35,11 @@ import {
   Maximize2,
   HelpCircle,
   Compass,
+  Zap,
   Bookmark,
   Share2,
   Crown,
-  ListOrdered,
-  PenTool,
-  Loader2
+  ListOrdered
 } from 'lucide-react';
 import {
   AcademicDocument,
@@ -57,6 +58,9 @@ import {
 import { DBService } from '../services/db';
 import { GeminiService } from '../services/gemini';
 import { generateDocxBlob, downloadDocx } from '../utils/docxExport';
+import { downloadPdf } from '../utils/pdfExport';
+import { downloadPptx } from '../utils/pptxExport';
+import { BILLING_ENABLED, can, getPlanDisplayName } from '../lib/plans';
 import KorsIQLogo from './KorsIQLogo';
 import SubscriptionCheckoutModal from './SubscriptionCheckoutModal';
 
@@ -93,7 +97,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   onNavigateTab
 }) => {
   // Subscription Entitlement Check
-  const isPremium = hasStudioPrivileges(profile);
+  const isPremium = can('academicStudio', profile?.tier) && (BILLING_ENABLED ? hasStudioPrivileges(profile) : true);
   const [showUpgradeModal, setShowUpgradeModal] = useState(false);
   const [showCheckoutModal, setShowCheckoutModal] = useState(false);
   const [checkoutPlan, setCheckoutPlan] = useState<'plus' | 'studio'>('studio');
@@ -152,6 +156,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   // Preview & Export Modal State
   const [showExportModal, setShowExportModal] = useState(false);
   const [isExportingDocx, setIsExportingDocx] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
+  const [isExportingPptx, setIsExportingPptx] = useState(false);
   const [feedbackToast, setFeedbackToast] = useState<string | null>(null);
   const [insufficientCreditsNotice, setInsufficientCreditsNotice] = useState<{
     required: number;
@@ -165,8 +171,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   const [editorHistory, setEditorHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
 
-  const isExportAllowed = hasStudioPrivileges(profile);
-  const isVersionsAllowed = hasFullStudioPrivileges(profile);
+  const isExportAllowed = can('studioExports', profile?.tier) && (BILLING_ENABLED ? hasFullStudioPrivileges(profile) : true);
+  const isVersionsAllowed = can('fullAcademicStudio', profile?.tier) && (BILLING_ENABLED ? hasFullStudioPrivileges(profile) : true);
 
   const handleEditorChangeWithHistory = (newVal: string) => {
     handleEditorChange(newVal);
@@ -876,7 +882,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   // =========================================================
 
   const handleExportDocx = async () => {
-    if (!activeDocument) return;
+    if (!activeDocument || !isExportAllowed) return;
     setIsExportingDocx(true);
     try {
       const blob = await generateDocxBlob(activeDocument);
@@ -891,8 +897,34 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     }
   };
 
-  const handlePrintPdf = () => {
-    window.print();
+  const handleExportPdf = async () => {
+    if (!activeDocument || !isExportAllowed) return;
+    setIsExportingPdf(true);
+    try {
+      const safeTitle = activeDocument.title.replace(/[^a-zA-Z0-9_-]/g, '_');
+      downloadPdf(activeDocument, `${safeTitle}.pdf`);
+      showToast('PDF document exported successfully!');
+    } catch (err) {
+      console.error('PDF export failed:', err);
+      showToast('Failed to export PDF document.');
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
+  const handleExportPptx = async () => {
+    if (!activeDocument || !isExportAllowed) return;
+    setIsExportingPptx(true);
+    try {
+      const safeTitle = activeDocument.title.replace(/[^a-zA-Z0-9_-]/g, '_');
+      await downloadPptx(activeDocument, `${safeTitle}.pptx`);
+      showToast('PowerPoint presentation exported successfully!');
+    } catch (err) {
+      console.error('PPTX export failed:', err);
+      showToast('Failed to export PowerPoint presentation.');
+    } finally {
+      setIsExportingPptx(false);
+    }
   };
 
   // Document Management Operations
@@ -1008,7 +1040,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           <div className="bg-white dark:bg-slate-900 rounded-xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
               <div className="space-y-1.5 max-w-2xl">
-                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 rounded-md text-xs font-medium">
+                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 rounded-md text-[11px] font-semibold">
+                  <Sparkles size={12} />
                   <span>Academic Studio</span>
                 </div>
                 <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
@@ -1033,19 +1066,19 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
             {/* Quick Metrics Bar */}
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-5 border-t border-slate-100 dark:border-slate-800">
               <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 border border-slate-200/60 dark:border-slate-800">
-                <p className="text-xs font-medium text-slate-500">Active papers</p>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Active Papers</p>
                 <p className="text-lg font-bold text-slate-900 dark:text-white mt-0.5">{documents.length}</p>
               </div>
               <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 border border-slate-200/60 dark:border-slate-800">
-                <p className="text-xs font-medium text-slate-500">Words written</p>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Words Written</p>
                 <p className="text-lg font-bold text-blue-600 dark:text-blue-400 mt-0.5">{overallWordCount.toLocaleString()}</p>
               </div>
               <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 border border-slate-200/60 dark:border-slate-800">
-                <p className="text-xs font-medium text-slate-500">Document types</p>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Document Types</p>
                 <p className="text-lg font-bold text-slate-900 dark:text-white mt-0.5">{DOCUMENT_TYPES.length} formats</p>
               </div>
               <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 border border-slate-200/60 dark:border-slate-800">
-                <p className="text-xs font-medium text-slate-500">Supported exports</p>
+                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Supported Exports</p>
                 <p className="text-lg font-bold text-slate-900 dark:text-white mt-0.5">Word &amp; PDF</p>
               </div>
             </div>
@@ -1137,10 +1170,10 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                   >
                     <div className="space-y-3">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-medium capitalize px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                        <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
                           {doc.docType.replace('_', ' ')}
                         </span>
-                        <span className={`text-xs font-medium capitalize px-2 py-0.5 rounded border ${statusColor}`}>
+                        <span className={`text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded border ${statusColor}`}>
                           {doc.status.replace('_', ' ')}
                         </span>
                       </div>
@@ -1233,7 +1266,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           {/* Outline Inspection Card */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-6 sm:p-8 space-y-6 shadow-xs">
             <div className="space-y-2">
-              <span className="text-xs font-medium text-blue-600 dark:text-blue-400 capitalize">
+              <span className="text-[11px] font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
                 {activeDocument.docType.replace('_', ' ')} • {activeDocument.citationStyle} Citation
               </span>
               <h2 className="text-xl sm:text-2xl font-bold text-slate-900 dark:text-white">
@@ -1435,7 +1468,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                   if (!isExportAllowed) {
                     setShowQuietUpgrade({
                       feature: 'Export Manuscript',
-                      description: 'Exporting formatted Microsoft Word (.docx) and PDF documents is included in the Plus and Academic Studio plans.'
+                      description: `Exporting formatted Word (.docx), PDF (.pdf), and PowerPoint (.pptx) files is included in the ${getPlanDisplayName('studio')} plan.`
                     });
                   } else {
                     setShowExportModal(true);
@@ -1476,7 +1509,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
               <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg p-3.5 space-y-3 h-full flex flex-col justify-between shadow-xs">
                 <div className="space-y-2">
                   <div className="flex items-center justify-between px-1">
-                    <span className="text-xs font-semibold text-[#5B6472]">
+                    <span className="text-[10px] font-bold text-[#5B6472] uppercase tracking-wider">
                       Outline ({activeDocument.sections.length})
                     </span>
                     <span className="text-[10px] font-semibold text-[#2563EB] bg-[#EFF6FF] dark:bg-blue-950/60 px-2 py-0.5 rounded">
@@ -1552,7 +1585,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                   return (
                     <div className="space-y-1 pb-3 border-b border-[#E5E7EB] dark:border-slate-800">
                       <div className="flex items-center justify-between gap-2">
-                        <span className="text-xs font-semibold text-[#2563EB] bg-[#EFF6FF] dark:bg-blue-950/60 px-2 py-0.5 rounded">
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#2563EB] bg-[#EFF6FF] dark:bg-blue-950/60 px-2 py-0.5 rounded">
                           Section {currentSec?.order || 1} of {activeDocument.sections.length}
                         </span>
                         <span className="text-xs text-[#5B6472] font-medium">
@@ -1598,7 +1631,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                           onClick={() => handleContextualAssist('Elevate academic tone and vocabulary')}
                           className="px-2.5 py-1 bg-[#2563EB] hover:bg-blue-500 rounded text-xs font-semibold cursor-pointer"
                         >
-                          Rewrite — 1 credit
+                          {BILLING_ENABLED ? 'Rewrite — 1 credit' : 'Rewrite'}
                         </button>
                         <button
                           onClick={() => setSelectedTextSnippet('')}
@@ -1626,7 +1659,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
               <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg p-3.5 space-y-3.5 h-full flex flex-col shadow-xs">
                 {/* Brief Card */}
                 <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-[#E5E7EB] dark:border-slate-800 rounded-lg space-y-1">
-                  <p className="text-xs font-semibold text-[#5B6472]">Brief</p>
+                  <p className="text-[10px] font-bold text-[#5B6472] uppercase tracking-wider">Brief</p>
                   <p className="text-xs font-semibold text-[#111827] dark:text-white capitalize">
                     {activeDocument.docType.replace('_', ' ')} · {activeDocument.targetWordCount.toLocaleString()} words · {profile?.level || 'undergraduate'} · {activeDocument.citationStyle}
                   </p>
@@ -1640,8 +1673,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     disabled={isSectionGenerating || !!batchProgress}
                     className="w-full py-2.5 px-3 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer shadow-sm disabled:opacity-50 min-h-[44px]"
                   >
-                    {isSectionGenerating ? <Loader2 size={14} className="animate-spin" /> : <PenTool size={14} />}
-                    <span>{isSectionGenerating ? 'Drafting...' : 'Write section, 3 credits'}</span>
+                    <Wand2 size={14} />
+                    <span>{isSectionGenerating ? 'Drafting...' : (BILLING_ENABLED ? 'Write Section — 3 credits' : 'Write Section')}</span>
                   </button>
 
                   <button
@@ -1651,7 +1684,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     className="w-full py-2 px-3 bg-white dark:bg-slate-800 border border-[#2563EB]/40 hover:bg-blue-50/50 dark:hover:bg-slate-700 text-[#2563EB] dark:text-blue-400 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 min-h-[44px]"
                   >
                     <Layers size={14} />
-                    <span>{batchProgress ? 'Drafting full document...' : 'Generate full document, 10 credits'}</span>
+                    <span>{batchProgress ? 'Drafting Full Document...' : (BILLING_ENABLED ? 'Generate Full Document — 10 credits' : 'Generate Full Document')}</span>
                   </button>
 
                   <button
@@ -1666,7 +1699,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     disabled={isSectionGenerating || isAssistLoading || !editorText}
                     className="w-full py-2 px-3 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-[#111827] dark:text-white rounded-lg text-xs font-medium flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 min-h-[44px]"
                   >
-                    <span>{isAssistLoading ? 'Rewriting...' : 'Rewrite, 1 credit'}</span>
+                    <span>{isAssistLoading ? 'Rewriting...' : (BILLING_ENABLED ? 'Rewrite — 1 credit' : 'Rewrite')}</span>
                   </button>
 
                   <button
@@ -1675,7 +1708,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     disabled={isReviewLoading}
                     className="w-full py-2 px-3 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-[#111827] dark:text-white rounded-lg text-xs font-medium flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 min-h-[44px]"
                   >
-                    <span>{isReviewLoading ? 'Checking...' : 'Check citations, 1 credit'}</span>
+                    <span>{isReviewLoading ? 'Checking...' : (BILLING_ENABLED ? 'Check citations — 1 credit' : 'Check citations')}</span>
                   </button>
                 </div>
 
@@ -1683,7 +1716,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                 <div className="flex-1 flex flex-col justify-between space-y-2 pt-2 border-t border-[#E5E7EB] dark:border-slate-800">
                   <div className="space-y-2">
                     <div className="flex items-center justify-between">
-                      <span className="text-xs font-semibold text-[#5B6472]">
+                      <span className="text-[10px] font-bold text-[#5B6472] uppercase tracking-wider">
                         Sources ({activeDocument.references.length})
                       </span>
                       <button
@@ -1969,7 +2002,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl max-w-2xl w-full p-6 space-y-5 shadow-xl max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div>
-                <span className="text-xs font-medium text-blue-600 dark:text-blue-400">
+                <span className="text-[10px] font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
                   Step {wizardStep} of 3
                 </span>
                 <h3 className="font-semibold text-lg text-slate-900 dark:text-white">
@@ -1988,8 +2021,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
             {wizardStep === 1 && (
               <div className="space-y-4">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                    Document title or working topic *
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                    Document Title or Working Topic *
                   </label>
                   <input
                     type="text"
@@ -2003,8 +2036,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                      Document type
+                    <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                      Document Type
                     </label>
                     <select
                       value={newDocType}
@@ -2025,8 +2058,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                      Citation style
+                    <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                      Citation Style
                     </label>
                     <select
                       value={newDocCitation}
@@ -2044,8 +2077,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                      Course code / subject
+                    <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                      Course Code / Subject
                     </label>
                     <input
                       type="text"
@@ -2057,8 +2090,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                      Target word count goal
+                    <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                      Target Word Count Goal
                     </label>
                     <input
                       type="number"
@@ -2093,8 +2126,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
             {wizardStep === 2 && (
               <div className="space-y-4">
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                    Assignment instructions / rubric guidelines
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                    Assignment Instructions / Rubric Guidelines
                   </label>
                   <textarea
                     rows={5}
@@ -2110,7 +2143,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-1">
                   <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                    <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
                       Department / Faculty
                     </label>
                     <input
@@ -2123,8 +2156,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                   </div>
 
                   <div className="space-y-1.5">
-                    <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                      Lecturer / supervisor name
+                    <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                      Lecturer / Supervisor Name
                     </label>
                     <input
                       type="text"
@@ -2199,8 +2232,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                       </>
                     ) : (
                       <>
-                        <ListOrdered size={14} />
-                        <span>Generate outline, 2 credits</span>
+                        <Wand2 size={14} />
+                        <span>{BILLING_ENABLED ? 'Generate Outline — 2 credits' : 'Generate Outline'}</span>
                       </>
                     )}
                   </button>
@@ -2231,8 +2264,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
 
             <div className="space-y-3">
               <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                  Paper / book title *
+                <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                  Paper / Book Title *
                 </label>
                 <input
                   type="text"
@@ -2244,7 +2277,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
                   Authors *
                 </label>
                 <input
@@ -2258,7 +2291,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
 
               <div className="grid grid-cols-2 gap-3">
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
                     Year
                   </label>
                   <input
@@ -2270,7 +2303,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                   />
                 </div>
                 <div className="space-y-1">
-                  <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
+                  <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
                     DOI / Link
                   </label>
                   <input
@@ -2284,8 +2317,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
               </div>
 
               <div className="space-y-1">
-                <label className="text-xs font-medium text-slate-600 dark:text-slate-400">
-                  Relevant excerpt / key findings
+                <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
+                  Relevant Excerpt / Key Findings
                 </label>
                 <textarea
                   rows={3}
@@ -2325,7 +2358,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl max-w-4xl w-full p-6 space-y-5 shadow-xl max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div>
-                <span className="text-xs font-medium text-blue-600">
+                <span className="text-[10px] font-semibold text-blue-600 uppercase tracking-wider">
                   Export &amp; Print
                 </span>
                 <h3 className="font-semibold text-base text-slate-900 dark:text-white">
@@ -2352,11 +2385,21 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
               </button>
 
               <button
-                onClick={handlePrintPdf}
-                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                onClick={handleExportPdf}
+                disabled={isExportingPdf}
+                className="px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
               >
-                <Printer size={13} />
-                <span>Print / Save as PDF</span>
+                <Download size={13} />
+                <span>{isExportingPdf ? 'Exporting...' : 'PDF Document (.pdf)'}</span>
+              </button>
+
+              <button
+                onClick={handleExportPptx}
+                disabled={isExportingPptx}
+                className="px-4 py-2 bg-slate-700 hover:bg-slate-800 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-xs disabled:opacity-50"
+              >
+                <Download size={13} />
+                <span>{isExportingPptx ? 'Exporting...' : 'PowerPoint (.pptx)'}</span>
               </button>
 
               <div className="text-xs text-slate-500 ml-auto font-medium">
@@ -2368,7 +2411,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
             <div className="p-8 sm:p-10 bg-white text-slate-900 border border-slate-200 rounded-lg shadow-inner font-sans text-sm space-y-6 max-h-[480px] overflow-y-auto custom-scrollbar">
               {/* Cover Page */}
               <div className="text-center space-y-4 pb-8 border-b border-dashed border-slate-300">
-                <p className="text-xs font-bold uppercase tracking-wide text-slate-700">
+                <p className="text-xs font-bold uppercase tracking-wider text-slate-700">
                   {activeDocument.metadata?.institution || 'INSTITUTION OF HIGHER LEARNING'}
                 </p>
                 <p className="text-[11px] uppercase text-slate-500">
@@ -2440,11 +2483,11 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
             </div>
 
             <div className="space-y-1 max-w-sm mx-auto">
-              <span className="text-xs font-medium text-blue-600">
-                Studio Plan Feature
+              <span className="text-[10px] font-semibold text-blue-600 uppercase tracking-wider">
+                Scholar Plan Feature
               </span>
               <h3 className="font-semibold text-lg text-slate-900 dark:text-white">
-                Academic Studio
+                Unlock KorsIQ Academic Studio
               </h3>
               <p className="text-xs text-slate-500 leading-relaxed">
                 Academic Studio provides multi-chapter dissertation planning, student outline approval, section-by-section writing, real source citations, and Word &amp; PDF export.
@@ -2497,7 +2540,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
         <div className="fixed inset-0 z-50 bg-[#111827]/40 flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg max-w-sm w-full p-6 space-y-4 shadow-lg text-left">
             <div className="space-y-1.5">
-              <span className="text-xs font-semibold text-[#2563EB]">
+              <span className="text-[10px] font-bold text-[#2563EB] uppercase tracking-wider">
                 Plus &amp; Studio Feature
               </span>
               <h3 className="font-bold text-base text-[#111827] dark:text-white">

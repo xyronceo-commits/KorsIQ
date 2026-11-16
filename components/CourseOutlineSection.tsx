@@ -3,6 +3,7 @@ import { Course, StudySession, UserProfile, Difficulty } from '../types';
 import { DBService } from '../services/db';
 import { GeminiService } from '../services/gemini';
 import { getCurrentUserId, getAccessToken } from '../lib/supabase';
+import { BILLING_ENABLED, checkLimit } from '../lib/plans';
 import {
   calculateSemesterGpaNeeded,
   calculateExamMarkNeeded,
@@ -398,6 +399,31 @@ export const CourseOutlineSection: React.FC<CourseOutlineSectionProps> = ({
       // Keep existing courses
       for (const ec of courses) {
         mergedMap.set(ec.code.trim().toUpperCase(), ec);
+      }
+
+      // Count net-new courses against active plan limit
+      const activeExistingCount = courses.filter((c) => !c.archivedAt).length;
+      const netNewCourses = validCourses.filter(
+        (rc) => !mergedMap.has(rc.code.trim().toUpperCase())
+      );
+      if (netNewCourses.length > 0) {
+        const limitCheck = checkLimit({
+          tier: profile?.tier,
+          resource: 'courses',
+          currentCount: activeExistingCount,
+          incomingCount: netNewCourses.length,
+        });
+        if (!limitCheck.allowed) {
+          const msg =
+            limitCheck.allowedIncoming > 0
+              ? (BILLING_ENABLED
+                  ? `${netNewCourses.length} new courses found, ${limitCheck.allowedIncoming} allowed on your ${limitCheck.planName} plan (${limitCheck.meterText}). Remove ${netNewCourses.length - limitCheck.allowedIncoming} course(s) below or upgrade.`
+                  : `${netNewCourses.length} found, ${limitCheck.allowedIncoming} allowed (${limitCheck.meterText}). Uncheck or remove ${netNewCourses.length - limitCheck.allowedIncoming} course(s) below.`)
+              : limitCheck.blockMessage || 'Active course limit reached.';
+          setUploadError(msg);
+          setIsSavingCourses(false);
+          return;
+        }
       }
 
       // Update or add from review

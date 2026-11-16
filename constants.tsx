@@ -68,7 +68,7 @@ export const ICONS = {
   ChevronRight: <ChevronRight size={20} />,
   ChevronDown: <ChevronDown size={20} />,
   GraduationCap: <GraduationCap size={48} />,
-  Sparkles: <Sparkles size={20} />,
+  Sparkles: <BrainCircuit size={20} />,
   Search: <Search size={20} />,
   BookMarked: <BookMarked size={20} />,
   Folder: <Folder size={20} />,
@@ -105,6 +105,7 @@ export const DIFFICULTY_COLORS = {
 };
 
 import { AI_CREDIT_ALLOWANCES, AI_CREDIT_COSTS } from './lib/aiCredits';
+import { PLANS } from './lib/plans';
 export { AI_CREDIT_ALLOWANCES, AI_CREDIT_COSTS };
 
 // ==========================================
@@ -117,53 +118,55 @@ export const PAYSTACK_PAYMENT_LINKS = {
 } as const;
 
 // ==========================================
-// BETA: Plan limits & feature allowances
-// All values below are provisional beta limits pending 30-day review.
+// Plan limits & feature allowances (delegated to lib/plans.ts)
 // ==========================================
 export const BETA_PLAN_LIMITS = {
   free: {
-    name: 'Free',
-    price: '₦0',
-    priceNumeric: 0,
-    tagline: 'Get organised. Track your CGPA and plan your study time.',
-    storageLimitBytes: 500 * 1024 * 1024, // 500 MB (beta)
-    storageLimitDisplay: '500 MB',
-    monthlyUploadsLimit: 15,
-    aiCreditsAllowance: AI_CREDIT_ALLOWANCES.free, // 20 credits / month
-    hasStudioAccess: false,
-    canCreateCircles: false, // can join only
-    canExportDocxPdf: false,
-    hasVersionHistory: false
+    name: PLANS.free.displayName,
+    price: PLANS.free.priceFormatted,
+    priceNumeric: PLANS.free.priceNaira,
+    tagline: PLANS.free.tagline,
+    maxCourses: PLANS.free.maxCourses,
+    storageLimitBytes: PLANS.free.storageLimitBytes,
+    storageLimitDisplay: PLANS.free.storageLabel,
+    monthlyUploadsLimit: PLANS.free.monthlyUploadsLimit,
+    aiCreditsAllowance: PLANS.free.aiCreditsAllowance,
+    hasStudioAccess: PLANS.free.hasAcademicStudio,
+    canCreateCircles: PLANS.free.canCreateCircles,
+    canExportDocxPdf: PLANS.free.hasStudioExports,
+    hasVersionHistory: PLANS.free.hasFullAcademicStudio,
   },
   plus: {
-    name: 'KorsIQ Plus',
-    price: '₦7,500 / month',
-    priceNumeric: 7500,
+    name: PLANS.plus.displayName,
+    price: `${PLANS.plus.priceFormatted} / ${PLANS.plus.periodLabel}`,
+    priceNumeric: PLANS.plus.priceNaira,
     paymentLink: PAYSTACK_PAYMENT_LINKS.plus,
-    tagline: 'Study smarter. More AI credits, storage and Lite Studio.',
-    storageLimitBytes: 2 * 1024 * 1024 * 1024, // 2 GB (beta)
-    storageLimitDisplay: '2 GB',
-    monthlyUploadsLimit: 50,
-    aiCreditsAllowance: AI_CREDIT_ALLOWANCES.plus, // 150 credits / month
-    hasStudioAccess: true, // Lite studio
-    canCreateCircles: true,
-    canExportDocxPdf: true,
-    hasVersionHistory: false
+    tagline: PLANS.plus.tagline,
+    maxCourses: PLANS.plus.maxCourses,
+    storageLimitBytes: PLANS.plus.storageLimitBytes,
+    storageLimitDisplay: PLANS.plus.storageLabel,
+    monthlyUploadsLimit: PLANS.plus.monthlyUploadsLimit,
+    aiCreditsAllowance: PLANS.plus.aiCreditsAllowance,
+    hasStudioAccess: PLANS.plus.hasAcademicStudio,
+    canCreateCircles: PLANS.plus.canCreateCircles,
+    canExportDocxPdf: PLANS.plus.hasStudioExports,
+    hasVersionHistory: PLANS.plus.hasFullAcademicStudio,
   },
   studio: {
-    name: 'KorsIQ Premium',
-    price: '₦15,000 / month',
-    priceNumeric: 15000,
-    paymentLink: PAYSTACK_PAYMENT_LINKS.premium,
-    tagline: 'Research, write and produce. Full Studio workspace.',
-    storageLimitBytes: 10 * 1024 * 1024 * 1024, // 10 GB (beta)
-    storageLimitDisplay: '10 GB',
-    monthlyUploadsLimit: 200,
-    aiCreditsAllowance: AI_CREDIT_ALLOWANCES.studio, // 200 credits / month
-    hasStudioAccess: true,
-    canCreateCircles: true,
-    canExportDocxPdf: true,
-    hasVersionHistory: true
+    name: PLANS.studio.displayName,
+    price: `${PLANS.studio.priceFormatted} / ${PLANS.studio.periodLabel}`,
+    priceNumeric: PLANS.studio.priceNaira,
+    paymentLink: PAYSTACK_PAYMENT_LINKS.studio,
+    tagline: PLANS.studio.tagline,
+    maxCourses: PLANS.studio.maxCourses,
+    storageLimitBytes: PLANS.studio.storageLimitBytes,
+    storageLimitDisplay: PLANS.studio.storageLabel,
+    monthlyUploadsLimit: PLANS.studio.monthlyUploadsLimit,
+    aiCreditsAllowance: PLANS.studio.aiCreditsAllowance,
+    hasStudioAccess: PLANS.studio.hasAcademicStudio,
+    canCreateCircles: PLANS.studio.canCreateCircles,
+    canExportDocxPdf: PLANS.studio.hasStudioExports,
+    hasVersionHistory: PLANS.studio.hasFullAcademicStudio,
   }
 } as const;
 

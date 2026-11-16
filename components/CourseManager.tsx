@@ -5,9 +5,10 @@ import { GeminiService } from '../services/gemini';
 import { RecentFiles } from './RecentFiles';
 import { getCurrentUserId } from '../lib/supabase';
 import { DBService } from '../services/db';
+import { BILLING_ENABLED, checkLimit } from '../lib/plans';
 import { 
   Plus, 
-  Upload, 
+  Sparkles, 
   Calendar, 
   Trash2, 
   Link as LinkIcon, 
@@ -15,7 +16,9 @@ import {
   X, 
   Loader2, 
   AlertCircle,
-  BookOpen
+  BookOpen,
+  Archive,
+  ArchiveRestore
 } from 'lucide-react';
 
 interface CourseManagerProps {
@@ -63,6 +66,21 @@ const CourseManager: React.FC<CourseManagerProps> = ({
   const [activeForm, setActiveForm] = useState<'manual' | 'import' | null>(initialOpenForm);
   const [importTab, setImportTab] = useState<'syllabus' | 'url'>('syllabus');
   const [error, setError] = useState<string | null>(null);
+  const [pendingBulkImport, setPendingBulkImport] = useState<{
+    courses: Course[];
+    selectedIds: string[];
+    allowedCount: number;
+  } | null>(null);
+
+  const activeCourses = courses.filter((c) => !c.archivedAt);
+  const archivedCourses = courses.filter((c) => Boolean(c.archivedAt));
+  const courseLimit = checkLimit({
+    tier: profile?.tier,
+    resource: 'courses',
+    currentCount: activeCourses.length,
+    incomingCount: 1,
+  });
+  const maxCourses = courseLimit.limit ?? activeCourses.length;
 
   React.useEffect(() => {
     if (initialOpenForm) {
@@ -81,6 +99,36 @@ const CourseManager: React.FC<CourseManagerProps> = ({
     units: 3
   });
 
+  const handleIncomingImportedCourses = (newCourses: Course[], onSuccessClear: () => void) => {
+    if (newCourses.length === 0) {
+      setError('No courses were detected in that input.');
+      return;
+    }
+    const batchCheck = checkLimit({
+      tier: profile?.tier,
+      resource: 'courses',
+      currentCount: activeCourses.length,
+      incomingCount: newCourses.length,
+    });
+    if (batchCheck.allowed) {
+      setCourses(prev => [...prev, ...newCourses]);
+      onSuccessClear();
+      setActiveForm(null);
+      return;
+    }
+    if (batchCheck.allowedIncoming <= 0) {
+      setError(batchCheck.blockMessage || 'Course limit reached on your plan.');
+      return;
+    }
+    setPendingBulkImport({
+      courses: newCourses,
+      selectedIds: newCourses.slice(0, batchCheck.allowedIncoming).map((c) => c.id),
+      allowedCount: batchCheck.allowedIncoming,
+    });
+    onSuccessClear();
+    setActiveForm(null);
+  };
+
   const handleMagicImport = async () => {
     if (!magicText.trim()) return;
     setIsImporting(true);
@@ -91,9 +139,7 @@ const CourseManager: React.FC<CourseManagerProps> = ({
         ...c,
         id: crypto.randomUUID()
       }));
-      setCourses(prev => [...prev, ...newCourses]);
-      setMagicText('');
-      setActiveForm(null);
+      handleIncomingImportedCourses(newCourses, () => setMagicText(''));
     } catch (err: any) {
       console.error(err);
       setError("Extraction failed. Verify input syllabus syntax or structure.");
@@ -112,9 +158,7 @@ const CourseManager: React.FC<CourseManagerProps> = ({
         ...c,
         id: crypto.randomUUID()
       }));
-      setCourses(prev => [...prev, ...newCourses]);
-      setUrlInput('');
-      setActiveForm(null);
+      handleIncomingImportedCourses(newCourses, () => setUrlInput(''));
     } catch (err: any) {
       console.error(err);
       setError("URL ingestion failed. Ensure the link points to a reachable public web page.");
@@ -128,10 +172,8 @@ const CourseManager: React.FC<CourseManagerProps> = ({
     setError(null);
     if (!manualCourse.code || !manualCourse.title) return;
     
-    // Check limit
-    const limit = 12;
-    if (courses.length >= limit) {
-      setError(`Course limit reached. You can add up to ${limit} courses.`);
+    if (!courseLimit.allowed) {
+      setError(courseLimit.blockMessage || 'Course limit reached on your plan.');
       return;
     }
 
@@ -209,7 +251,27 @@ const CourseManager: React.FC<CourseManagerProps> = ({
     }
   };
 
-  const maxCourses = 12;
+  const toggleArchiveCourse = async (course: Course) => {
+    setError(null);
+    const shouldArchive = !course.archivedAt;
+    if (!shouldArchive && !courseLimit.allowed) {
+      setError(courseLimit.blockMessage || 'Course limit reached on your plan.');
+      return;
+    }
+    const archivedAt = shouldArchive ? new Date().toISOString() : undefined;
+    const prevCourses = courses;
+    setCourses((prev) =>
+      prev.map((c) => (c.id === course.id ? { ...c, archivedAt } : c))
+    );
+    const userId = getCurrentUserId();
+    if (userId) {
+      const { error: dbErr } = await DBService.archiveCourse(userId, course.id, shouldArchive);
+      if (dbErr) {
+        setCourses(prevCourses);
+        setError(dbErr?.message || 'Could not update course archive status.');
+      }
+    }
+  };
 
   return (
     <div className="space-y-6 animate-in fade-in duration-300 max-w-7xl mx-auto">
@@ -221,12 +283,13 @@ const CourseManager: React.FC<CourseManagerProps> = ({
             Courses
           </h1>
           <p className="text-xs sm:text-sm text-slate-500 font-normal font-sans">
-            {courses.length}/{maxCourses} registered courses
+            {courseLimit.meterText}
+            {archivedCourses.length > 0 ? ` · ${archivedCourses.length} archived` : ''}
           </p>
         </div>
         
         <div className="flex flex-wrap items-center gap-2">
-          {/* Button 1: Import Syllabus */}
+          {/* Button 1: Magic Import */}
           <button
             onClick={() => {
               setError(null);
@@ -238,8 +301,8 @@ const CourseManager: React.FC<CourseManagerProps> = ({
                 : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50 hover:border-slate-300'
             }`}
           >
-            <Upload size={13.5} className="text-slate-500" />
-            <span>Import syllabus</span>
+            <Sparkles size={13.5} className={activeForm === 'import' ? 'animate-pulse text-blue-600' : 'text-slate-500'} />
+            <span>Magic Import</span>
           </button>
 
           {/* Button 2: Generate Schedule */}
@@ -330,7 +393,7 @@ const CourseManager: React.FC<CourseManagerProps> = ({
                 placeholder="e.g. CS101"
                 value={manualCourse.code || ''}
                 onChange={e => setManualCourse({...manualCourse, code: e.target.value})}
-                className="w-full h-9 bg-white border border-slate-300 rounded-lg px-3 text-xs font-semibold uppercase outline-none text-slate-900 focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-all placeholder:text-slate-400 placeholder:normal-case"
+                className="w-full h-9 bg-white border border-slate-300 rounded-lg px-3 text-xs font-semibold uppercase tracking-wider outline-none text-slate-900 focus:border-blue-600 focus:ring-1 focus:ring-blue-600 transition-all placeholder:text-slate-400 placeholder:normal-case"
               />
             </div>
 
@@ -416,8 +479,8 @@ const CourseManager: React.FC<CourseManagerProps> = ({
           <div className="flex justify-between items-center pb-3 border-b border-slate-100">
             <div>
               <h3 className="text-sm font-semibold text-slate-900 flex items-center gap-2">
-                <Upload size={15} className="text-slate-700" />
-                Syllabus Importer
+                <Sparkles size={15} className="text-blue-600" />
+                AI Syllabus Importer
               </h3>
               <p className="text-xs text-slate-500">Extract courses, units, and descriptions from syllabus text or link.</p>
             </div>
@@ -496,7 +559,10 @@ const CourseManager: React.FC<CourseManagerProps> = ({
                       <span>Parsing with AI...</span>
                     </>
                   ) : (
-                    <span>Extract and Save</span>
+                    <>
+                      <Sparkles size={14} />
+                      <span>Extract & Save</span>
+                    </>
                   )}
                 </button>
               </div>
@@ -570,25 +636,41 @@ const CourseManager: React.FC<CourseManagerProps> = ({
       ) : (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
-            <h3 className="text-xs font-semibold text-slate-500">
-              Enrolled Courses ({courses.length})
+            <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-500">
+              Active Courses ({activeCourses.length})
             </h3>
             
             <div className="flex items-center gap-3">
               <span className="text-xs text-slate-500">
-                {courses.length} of {maxCourses} courses used
+                {courseLimit.meterText}
               </span>
               <div className="w-24 h-1.5 bg-slate-100 rounded-full overflow-hidden border border-slate-200">
                 <div 
-                  className="h-full bg-blue-600 transition-all duration-300" 
-                  style={{ width: `${(courses.length / maxCourses) * 100}%` }} 
+                  className={`h-full transition-all duration-300 ${
+                    courseLimit.isOverLimit || courseLimit.isAtLimit
+                      ? 'bg-amber-600'
+                      : courseLimit.isWarning
+                        ? 'bg-amber-500'
+                        : 'bg-blue-600'
+                  }`}
+                  style={{ width: `${maxCourses > 0 ? Math.min(100, (activeCourses.length / maxCourses) * 100) : 0}%` }} 
                 />
               </div>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pb-12">
-            {courses.map(course => {
+          {(courseLimit.overLimitMessage || courseLimit.warningText || courseLimit.isAtLimit) && (
+            <div className={`px-4 py-3 rounded-lg border text-xs ${
+              courseLimit.overLimitMessage || courseLimit.isAtLimit
+                ? 'bg-amber-50 border-amber-200 text-amber-900'
+                : 'bg-slate-50 border-slate-200 text-slate-700'
+            }`}>
+              {courseLimit.overLimitMessage || courseLimit.blockMessage || courseLimit.warningText}
+            </div>
+          )}
+
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4 pb-8">
+            {activeCourses.map(course => {
               const difficultyBadge = 
                 course.difficulty === Difficulty.HARD 
                   ? 'bg-rose-50 text-rose-700 border-rose-200'
@@ -613,13 +695,22 @@ const CourseManager: React.FC<CourseManagerProps> = ({
                         </span>
                       </div>
 
-                      <button 
-                        onClick={() => removeCourse(course.id)}
-                        className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
-                        title="Delete course"
-                      >
-                        <Trash2 size={13} />
-                      </button>
+                      <div className="flex items-center gap-1">
+                        <button
+                          onClick={() => toggleArchiveCourse(course)}
+                          className="p-1 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"
+                          title="Archive course"
+                        >
+                          <Archive size={13} />
+                        </button>
+                        <button 
+                          onClick={() => removeCourse(course.id)}
+                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors"
+                          title="Delete course"
+                        >
+                          <Trash2 size={13} />
+                        </button>
+                      </div>
                     </div>
 
                     <h4 className="text-sm font-semibold text-slate-900 mt-3 group-hover:text-blue-600 transition-colors">
@@ -646,6 +737,126 @@ const CourseManager: React.FC<CourseManagerProps> = ({
                 </div>
               );
             })}
+          </div>
+
+          {archivedCourses.length > 0 && (
+            <div className="space-y-3 pt-2 pb-8">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400">
+                Archived Courses ({archivedCourses.length}) — kept for CGPA history
+              </h3>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+                {archivedCourses.map((course) => (
+                  <div
+                    key={course.id}
+                    className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex items-center justify-between gap-3"
+                  >
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold text-slate-600 bg-white border border-slate-200 px-2 py-0.5 rounded-md">
+                          {course.code}
+                        </span>
+                        <span className="text-[11px] text-slate-400">{course.units} units</span>
+                      </div>
+                      <p className="text-sm font-medium text-slate-700 truncate mt-1.5">{course.title}</p>
+                    </div>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        onClick={() => toggleArchiveCourse(course)}
+                        className="p-1.5 text-slate-500 hover:text-blue-600 hover:bg-white rounded-md transition-colors"
+                        title="Restore to active courses"
+                      >
+                        <ArchiveRestore size={14} />
+                      </button>
+                      <button
+                        onClick={() => removeCourse(course.id)}
+                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-white rounded-md transition-colors"
+                        title="Delete course"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Bulk Import Review Modal */}
+      {pendingBulkImport && (
+        <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl border border-slate-200 max-w-lg w-full p-5 space-y-4 shadow-xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h3 className="text-base font-semibold text-slate-900">Select Courses to Import</h3>
+                <p className="text-xs text-slate-600 mt-1">
+                  {pendingBulkImport.courses.length} found, {pendingBulkImport.allowedCount} allowed{BILLING_ENABLED ? ` on your ${courseLimit.planName} plan` : ''}.
+                </p>
+              </div>
+              <button
+                onClick={() => setPendingBulkImport(null)}
+                className="p-1 text-slate-400 hover:text-slate-600 rounded-md"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="max-h-72 overflow-y-auto divide-y divide-slate-100 border border-slate-200 rounded-lg">
+              {pendingBulkImport.courses.map((c) => {
+                const checked = pendingBulkImport.selectedIds.includes(c.id);
+                const disableSelect = !checked && pendingBulkImport.selectedIds.length >= pendingBulkImport.allowedCount;
+                return (
+                  <label
+                    key={c.id}
+                    className={`flex items-center gap-3 px-3.5 py-2.5 text-sm cursor-pointer ${
+                      disableSelect ? 'opacity-50 cursor-not-allowed' : 'hover:bg-slate-50'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={checked}
+                      disabled={disableSelect}
+                      onChange={() => {
+                        setPendingBulkImport((prev) => {
+                          if (!prev) return null;
+                          const exists = prev.selectedIds.includes(c.id);
+                          const nextIds = exists
+                            ? prev.selectedIds.filter((id) => id !== c.id)
+                            : prev.selectedIds.length < prev.allowedCount
+                              ? [...prev.selectedIds, c.id]
+                              : prev.selectedIds;
+                          return { ...prev, selectedIds: nextIds };
+                        });
+                      }}
+                    />
+                    <span className="font-semibold text-slate-800 shrink-0">{c.code}</span>
+                    <span className="text-slate-600 truncate flex-1">{c.title}</span>
+                    <span className="text-xs text-slate-400 shrink-0">{c.units}u</span>
+                  </label>
+                );
+              })}
+            </div>
+            <div className="flex items-center justify-end gap-2 pt-1">
+              <button
+                onClick={() => setPendingBulkImport(null)}
+                className="px-3.5 py-2 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={pendingBulkImport.selectedIds.length === 0}
+                onClick={() => {
+                  const chosen = pendingBulkImport.courses.filter((c) =>
+                    pendingBulkImport.selectedIds.includes(c.id)
+                  );
+                  setCourses((prev) => [...prev, ...chosen]);
+                  setPendingBulkImport(null);
+                }}
+                className="px-4 py-2 text-xs font-semibold text-white bg-blue-600 hover:bg-blue-700 disabled:opacity-50 rounded-lg"
+              >
+                Import {pendingBulkImport.selectedIds.length} Selected
+              </button>
+            </div>
           </div>
         </div>
       )}

@@ -3,6 +3,7 @@ import { UserProfile, Course, StudySession, AcademicDocument, CGPASemester, Acad
 import { DAYS } from '../constants';
 import { getCurrentUserId } from '../lib/supabase';
 import { DBService } from '../services/db';
+import { checkLimit } from '../lib/plans';
 import TaskModal from './TaskModal';
 import {
   FileText,
@@ -32,8 +33,6 @@ interface DashboardProps {
   onAddCourse?: (course: Course) => void;
   onOpenAddCourse?: () => void;
 }
-
-const MAX_COURSES = 12;
 
 export const Dashboard: React.FC<DashboardProps> = ({
   profile,
@@ -66,6 +65,14 @@ export const Dashboard: React.FC<DashboardProps> = ({
     setCourseError(null);
   };
 
+  const activeCourses = courses.filter(c => !c.archivedAt);
+  const courseLimit = checkLimit({
+    tier: profile?.tier,
+    resource: 'courses',
+    currentCount: activeCourses.length,
+    incomingCount: 1,
+  });
+
   const handleAddCourseSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     const code = newCourseCode.trim().toUpperCase();
@@ -74,12 +81,12 @@ export const Dashboard: React.FC<DashboardProps> = ({
       setCourseError('Enter a course code and title.');
       return;
     }
-    if (courses.length >= MAX_COURSES) {
-      setCourseError(`Course limit reached. You can add up to ${MAX_COURSES} courses.`);
+    if (!courseLimit.allowed) {
+      setCourseError(courseLimit.blockMessage || 'Course limit reached on your plan.');
       return;
     }
-    if (courses.some(c => c.code.toUpperCase() === code)) {
-      setCourseError(`${code} is already in your courses.`);
+    if (activeCourses.some(c => c.code.toUpperCase() === code)) {
+      setCourseError(`${code} is already in your active courses.`);
       return;
     }
     onAddCourse?.({

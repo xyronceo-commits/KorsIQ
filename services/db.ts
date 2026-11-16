@@ -405,6 +405,7 @@ export const DBService = {
         topics: Array.isArray(c.topics) ? c.topics : [],
         caScore: typeof c.ca_score === 'number' ? c.ca_score : undefined,
         examWeight: typeof c.exam_weight === 'number' ? c.exam_weight : 70,
+        archivedAt: c.archived_at || undefined,
       }));
       writeCache('courses', userId, courses);
       return courses;
@@ -416,13 +417,8 @@ export const DBService = {
 
   async saveCourse(userId: string, course: Course) {
     try {
-      const list = readCache<Course[]>('courses', userId, []);
       const courseId = course.id || `course_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`;
       const merged = { ...course, id: courseId };
-      const idx = list.findIndex((c) => c.id === courseId);
-      if (idx >= 0) list[idx] = merged;
-      else list.push(merged);
-      writeCache('courses', userId, list);
 
       const { error } = await supabase.from('courses').upsert(
         {
@@ -436,13 +432,43 @@ export const DBService = {
           topics: course.topics || [],
           ca_score: course.caScore ?? null,
           exam_weight: course.examWeight ?? 70,
+          archived_at: course.archivedAt ?? null,
         },
         { onConflict: 'id' }
       );
       if (error) throw error;
+
+      const list = readCache<Course[]>('courses', userId, []);
+      const idx = list.findIndex((c) => c.id === courseId);
+      if (idx >= 0) list[idx] = merged;
+      else list.push(merged);
+      writeCache('courses', userId, list);
       return { error: null };
     } catch (err) {
       console.error('saveCourse error:', err);
+      return { error: err };
+    }
+  },
+
+  async archiveCourse(userId: string, courseId: string, archive = true): Promise<{ error: any }> {
+    const archivedAt = archive ? new Date().toISOString() : null;
+    try {
+      const { error } = await supabase
+        .from('courses')
+        .update({ archived_at: archivedAt })
+        .eq('id', courseId)
+        .eq('user_id', userId);
+      if (error) throw error;
+
+      const list = readCache<Course[]>('courses', userId, []);
+      writeCache(
+        'courses',
+        userId,
+        list.map((c) => (c.id === courseId ? { ...c, archivedAt: archivedAt || undefined } : c))
+      );
+      return { error: null };
+    } catch (err) {
+      console.error('archiveCourse error:', err);
       return { error: err };
     }
   },
@@ -453,10 +479,10 @@ export const DBService = {
 
   async saveCourses(userId: string, courses: Course[]) {
     try {
-      writeCache('courses', userId, courses);
       if (courses.length === 0) {
         // If empty array, delete all user courses from Supabase
         await supabase.from('courses').delete().eq('user_id', userId);
+        writeCache('courses', userId, courses);
         return { error: null };
       }
 
@@ -471,9 +497,11 @@ export const DBService = {
         topics: c.topics || [],
         ca_score: c.caScore ?? null,
         exam_weight: c.examWeight ?? 70,
+        archived_at: c.archivedAt ?? null,
       }));
       const { error } = await supabase.from('courses').upsert(rows, { onConflict: 'id' });
       if (error) throw error;
+      writeCache('courses', userId, courses);
       return { error: null };
     } catch (err) {
       console.error('saveCourses error:', err);
@@ -803,8 +831,14 @@ export const DBService = {
           writeCache('groups', userId, [newGroup, ...list.filter((g) => g.id !== newGroup.id)]);
           return newGroup;
         }
+      } else if (res.status === 403 || res.status === 400) {
+        const errJson = await res.json().catch(() => ({}));
+        throw new Error(errJson?.error || 'Circle creation is not allowed on your current plan.');
       }
-    } catch (apiErr) {
+    } catch (apiErr: any) {
+      if (apiErr instanceof Error && /plan|limit|require|upgrade|circle/i.test(apiErr.message)) {
+        throw apiErr;
+      }
       console.warn('Backend /api/circles/create fallback:', apiErr);
     }
 
@@ -898,6 +932,28 @@ export const DBService = {
   ): Promise<{ success: boolean; error?: string; group?: StudyGroup; isAlreadyMember?: boolean }> {
     try {
       const codeTrimmed = (inviteCode || '').trim().toUpperCase();
+
+      // 0. Server-side join endpoint (enforces plan circle limits & private invite codes)
+      try {
+        const token = await getAccessToken();
+        const joinRes = await fetch('/api/circles/join', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { Authorization: `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({ groupId, code: codeTrimmed, userName })
+        });
+        const joinJson = await joinRes.json().catch(() => ({}));
+        if (joinRes.ok && joinJson.success && joinJson.group) {
+          return { success: true, group: joinJson.group };
+        }
+        if (joinRes.status === 403 || joinRes.status === 400 || joinRes.status === 404) {
+          return { success: false, error: joinJson?.error || 'Unable to join circle.' };
+        }
+      } catch (apiErr) {
+        console.warn('Backend /api/circles/join fallback:', apiErr);
+      }
 
       // Check current group status
       const existingGroup = await fetchGroupRow(groupId);
@@ -2335,10 +2391,16 @@ export const DBService = {
         body: JSON.stringify({
           fileName: file.name,
           fileType: file.type || 'application/octet-stream',
+          fileSizeBytes: file.size,
           courseId,
           targetBucket: USER_FILES_BUCKET
         })
       });
+
+      if (presignRes.status === 403) {
+        const errJson = await presignRes.json().catch(() => ({}));
+        throw new Error(errJson?.error || 'Upload limit reached for your current plan.');
+      }
 
       if (presignRes.ok) {
         const presignData = await presignRes.json();
@@ -2355,7 +2417,10 @@ export const DBService = {
           }
         }
       }
-    } catch (s3Err) {
+    } catch (s3Err: any) {
+      if (s3Err instanceof Error && /plan|limit|upgrade|storage|upload/i.test(s3Err.message)) {
+        throw s3Err;
+      }
       console.warn('[Storage] S3 direct upload fallback:', s3Err);
     }
 
