@@ -4518,6 +4518,9 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
     if (targetUrl.protocol !== 'http:' && targetUrl.protocol !== 'https:') {
       return { ok: false, error: 'Only http:// and https:// links are supported.' };
     }
+    if (targetUrl.username || targetUrl.password) {
+      return { ok: false, error: 'URLs with embedded credentials are not allowed.' };
+    }
     const hostname = targetUrl.hostname.toLowerCase();
     if (
       hostname === 'localhost' ||
@@ -4621,15 +4624,37 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
         });
       }
 
-      const arrayBuf = await response.arrayBuffer();
-      if (arrayBuf.byteLength > MAX_URL_BYTES) {
-        return res.status(200).json({
-          success: false,
-          error: 'That file is larger than 10 MB. Download it and upload from your device instead.'
-        });
+      let buffer: Buffer;
+      if (response.body) {
+        const reader = response.body.getReader();
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          if (value) {
+            total += value.byteLength;
+            if (total > MAX_URL_BYTES) {
+              try { await reader.cancel(); } catch {}
+              return res.status(200).json({
+                success: false,
+                error: 'That file is larger than 10 MB. Download it and upload from your device instead.'
+              });
+            }
+            chunks.push(value);
+          }
+        }
+        buffer = Buffer.concat(chunks);
+      } else {
+        const arrayBuf = await response.arrayBuffer();
+        if (arrayBuf.byteLength > MAX_URL_BYTES) {
+          return res.status(200).json({
+            success: false,
+            error: 'That file is larger than 10 MB. Download it and upload from your device instead.'
+          });
+        }
+        buffer = Buffer.from(arrayBuf);
       }
-
-      const buffer = Buffer.from(arrayBuf);
       const contentType = (response.headers.get('content-type') || '').toLowerCase();
       const pathPart = currentUrl.pathname.split('/').filter(Boolean).pop() || currentUrl.hostname;
       const derivedName = decodeURIComponent(pathPart).slice(0, 80) || currentUrl.hostname;

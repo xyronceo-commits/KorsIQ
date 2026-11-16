@@ -10,6 +10,7 @@ import {
   GroupMember
 } from '../types';
 import { checkLimit } from '../lib/plans';
+import { getAccessToken } from '../lib/supabase';
 import { 
   Globe, 
   Lock, 
@@ -997,16 +998,51 @@ export const StudyGroups: React.FC<StudyGroupsProps> = ({
                             <span>Blocked</span>
                           </span>
                         ) : (
-                          <a
-                            href={post.fileUrl}
-                            download={post.fileName || 'document'}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="inline-flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold min-h-[44px] transition-colors shrink-0"
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              try {
+                                const token = await getAccessToken();
+                                const rawUrl = post.fileUrl || '';
+                                const keyMatch = rawUrl.match(/\/object\/public\/([^/]+)\/(.+)$/);
+                                const storageKey = (post as any).storagePath || (post as any).s3Key || (keyMatch ? decodeURIComponent(keyMatch[2]) : '');
+                                const bucket = keyMatch ? keyMatch[1] : 'group-materials';
+                                if (!storageKey) {
+                                  window.open(rawUrl, '_blank', 'noopener,noreferrer');
+                                  return;
+                                }
+                                const res = await fetch('/api/s3/presign', {
+                                  method: 'POST',
+                                  headers: {
+                                    'Content-Type': 'application/json',
+                                    ...(token ? { Authorization: `Bearer ${token}` } : {})
+                                  },
+                                  body: JSON.stringify({
+                                    key: storageKey,
+                                    bucket,
+                                    downloadName: post.fileName || 'document'
+                                  })
+                                });
+                                const data = await res.json().catch(() => ({}));
+                                if (!res.ok || !data.presignedUrl) {
+                                  addNotification('message', 'Download blocked', data.error || 'This file is not available for download yet.');
+                                  return;
+                                }
+                                const a = document.createElement('a');
+                                a.href = data.presignedUrl;
+                                a.download = post.fileName || 'document';
+                                document.body.appendChild(a);
+                                a.click();
+                                a.remove();
+                              } catch {
+                                addNotification('message', 'Download failed', 'Could not download file. Please try again.');
+                              }
+                            }}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold min-h-[44px] transition-colors shrink-0 cursor-pointer"
                           >
                             <Download size={14} />
                             <span>Download</span>
-                          </a>
+                          </button>
                         )
                       )}
                     </div>
