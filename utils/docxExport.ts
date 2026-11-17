@@ -1,5 +1,6 @@
 import JSZip from 'jszip';
 import { AcademicDocument } from '../types';
+import { renderVisualBlockToPng } from './visualRenderer';
 
 function escapeXml(unsafe: string): string {
   return (unsafe || '')
@@ -10,24 +11,29 @@ function escapeXml(unsafe: string): string {
     .replace(/'/g, '&apos;');
 }
 
+function dataUrlToUint8Array(dataUrl: string): Uint8Array {
+  const base64 = dataUrl.split(',')[1] || '';
+  const binary = atob(base64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return bytes;
+}
+
 /**
  * Generates an OpenXML (.docx) Blob from an AcademicDocument with
- * Title Page, Table of Contents, Numbered Headings, Tables, and Formatted References.
+ * Title Page, Table of Contents, Numbered Headings, Tables, Optional Visuals, and Formatted References.
  */
 export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
   const zip = new JSZip();
+  const designStyle = doc.metadata?.visualPreferences?.designStyle || 'classic_academic';
+  const isClassic = designStyle === 'classic_academic';
+  const bodyFont = isClassic ? 'Times New Roman' : 'Calibri';
+  const headingColor = isClassic ? '111827' : '1E3A8A';
 
-  // 1. [Content_Types].xml
-  zip.file(
-    '[Content_Types].xml',
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
-  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
-  <Default Extension="xml" ContentType="application/xml"/>
-  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
-  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
-</Types>`
-  );
+  const mediaRels: Array<{ rId: string; target: string }> = [];
+  let mediaCounter = 0;
 
   // 2. _rels/.rels
   zip.file(
@@ -35,15 +41,6 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
     `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
 <Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
   <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
-</Relationships>`
-  );
-
-  // 3. word/_rels/document.xml.rels
-  zip.file(
-    'word/_rels/document.xml.rels',
-    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
-  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
 </Relationships>`
   );
 
@@ -55,7 +52,7 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
   <w:docDefaults>
     <w:rPrDefault>
       <w:rPr>
-        <w:rFonts w:ascii="Times New Roman" w:hAnsi="Times New Roman" w:cs="Times New Roman"/>
+        <w:rFonts w:ascii="${bodyFont}" w:hAnsi="${bodyFont}" w:cs="${bodyFont}"/>
         <w:sz w:val="24"/>
         <w:szCs w:val="24"/>
         <w:lang w:val="en-US"/>
@@ -76,10 +73,11 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
     <w:name w:val="heading 1"/>
     <w:pPr>
       <w:spacing w:before="360" w:after="180"/>
-      <w:jc w:val="center"/>
+      <w:jc w:val="${isClassic ? 'center' : 'left'}"/>
     </w:pPr>
     <w:rPr>
       <w:b/>
+      <w:color w:val="${headingColor}"/>
       <w:sz w:val="32"/>
     </w:rPr>
   </w:style>
@@ -91,6 +89,7 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
     </w:pPr>
     <w:rPr>
       <w:b/>
+      <w:color w:val="${headingColor}"/>
       <w:sz w:val="28"/>
     </w:rPr>
   </w:style>
@@ -296,6 +295,110 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
         </w:p>
       `;
     }
+
+    // Optional Visual Elements for this section (only when generated/enabled)
+    if (Array.isArray(section.visuals) && section.visuals.length > 0) {
+      section.visuals.forEach((vis) => {
+        if (vis.kind === 'comparison_table' && vis.headers && vis.rows && vis.rows.length > 0) {
+          bodyXml += `
+            <w:p>
+              <w:pPr><w:spacing w:before="200" w:after="80"/></w:pPr>
+              <w:r><w:rPr><w:b/><w:color w:val="${headingColor}"/><w:sz w:val="22"/></w:rPr><w:t>${escapeXml(vis.title)}</w:t></w:r>
+            </w:p>
+            <w:tbl><w:tblPr><w:tblW w:w="9360" w:type="dxa"/><w:tblBorders><w:top w:val="single" w:sz="4" w:color="CBD5E1"/><w:bottom w:val="single" w:sz="4" w:color="CBD5E1"/><w:left w:val="single" w:sz="4" w:color="CBD5E1"/><w:right w:val="single" w:sz="4" w:color="CBD5E1"/><w:insideH w:val="single" w:sz="4" w:color="E2E8F0"/><w:insideV w:val="single" w:sz="4" w:color="E2E8F0"/></w:tblBorders></w:tblPr>
+              <w:tr>
+                ${vis.headers
+                  .map(
+                    (h) => `
+                  <w:tc>
+                    <w:tcPr><w:shd w:val="clear" w:color="auto" w:fill="2563EB"/><w:tcMar><w:top w:w="120"/><w:bottom w:w="120"/><w:left w:w="140"/><w:right w:w="140"/></w:tcMar></w:tcPr>
+                    <w:p><w:pPr><w:spacing w:after="0"/></w:pPr><w:r><w:rPr><w:b/><w:color w:val="FFFFFF"/><w:sz w:val="20"/></w:rPr><w:t>${escapeXml(h)}</w:t></w:r></w:p>
+                  </w:tc>`
+                  )
+                  .join('')}
+              </w:tr>
+              ${vis.rows
+                .map(
+                  (row, rIdx) => `
+                <w:tr>
+                  ${vis.headers!
+                    .map(
+                      (_, cIdx) => `
+                    <w:tc>
+                      <w:tcPr>${rIdx % 2 === 1 ? '<w:shd w:val="clear" w:color="auto" w:fill="F8FAFC"/>' : ''}<w:tcMar><w:top w:w="100"/><w:bottom w:w="100"/><w:left w:w="140"/><w:right w:w="140"/></w:tcMar></w:tcPr>
+                      <w:p><w:pPr><w:spacing w:after="0"/></w:pPr><w:r><w:rPr><w:sz w:val="20"/></w:rPr><w:t>${escapeXml(row[cIdx] ?? '')}</w:t></w:r></w:p>
+                    </w:tc>`
+                    )
+                    .join('')}
+                </w:tr>`
+                )
+                .join('')}
+            </w:tbl>
+          `;
+          if (vis.caption) {
+            bodyXml += `
+              <w:p>
+                <w:pPr><w:spacing w:before="60" w:after="180"/></w:pPr>
+                <w:r><w:rPr><w:i/><w:color w:val="475569"/><w:sz w:val="20"/></w:rPr><w:t>${escapeXml(vis.caption)}</w:t></w:r>
+              </w:p>
+            `;
+          }
+          return;
+        }
+
+        const rendered = renderVisualBlockToPng(vis, designStyle);
+        if (!rendered) return;
+
+        mediaCounter += 1;
+        const fileName = `visual_${mediaCounter}.png`;
+        const rId = `rIdImg${mediaCounter}`;
+        zip.file(`word/media/${fileName}`, dataUrlToUint8Array(rendered.dataUrl));
+        mediaRels.push({ rId, target: `media/${fileName}` });
+
+        // Fit cleanly within 6 inches (5486400 EMUs) wide, preserving aspect ratio
+        const cx = 5486400;
+        const cy = Math.round(cx * (rendered.height / rendered.width));
+
+        bodyXml += `
+          <w:p>
+            <w:pPr><w:jc w:val="center"/><w:spacing w:before="180" w:after="80"/></w:pPr>
+            <w:r>
+              <w:drawing>
+                <wp:inline distT="0" distB="0" distL="0" distR="0">
+                  <wp:extent cx="${cx}" cy="${cy}"/>
+                  <wp:docPr id="${mediaCounter}" name="${escapeXml(vis.title)}"/>
+                  <wp:cNvGraphicFramePr>
+                    <a:graphicFrameLocks noChangeAspect="1"/>
+                  </wp:cNvGraphicFramePr>
+                  <a:graphic>
+                    <a:graphicData uri="http://schemas.openxmlformats.org/drawingml/2006/picture">
+                      <pic:pic>
+                        <pic:nvPicPr>
+                          <pic:cNvPr id="${mediaCounter}" name="${escapeXml(fileName)}"/>
+                          <pic:cNvPicPr/>
+                        </pic:nvPicPr>
+                        <pic:blipFill>
+                          <a:blip r:embed="${rId}"/>
+                          <a:stretch><a:fillRect/></a:stretch>
+                        </pic:blipFill>
+                        <pic:spPr>
+                          <a:xfrm><a:off x="0" y="0"/><a:ext cx="${cx}" cy="${cy}"/></a:xfrm>
+                          <a:prstGeom prst="rect"><a:avLst/></a:prstGeom>
+                        </pic:spPr>
+                      </pic:pic>
+                    </a:graphicData>
+                  </a:graphic>
+                </wp:inline>
+              </w:drawing>
+            </w:r>
+          </w:p>
+          <w:p>
+            <w:pPr><w:jc w:val="center"/><w:spacing w:after="180"/></w:pPr>
+            <w:r><w:rPr><w:i/><w:color w:val="475569"/><w:sz w:val="20"/></w:rPr><w:t>${escapeXml(vis.caption || vis.title)}</w:t></w:r>
+          </w:p>
+        `;
+      });
+    }
   });
 
   // REFERENCES / BIBLIOGRAPHY SECTION
@@ -332,9 +435,35 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
     });
   }
 
+  // 5b. [Content_Types].xml & word/_rels/document.xml.rels (include PNGs only if visuals were embedded)
+  zip.file(
+    '[Content_Types].xml',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>${mediaRels.length > 0 ? '\n  <Default Extension="png" ContentType="image/png"/>' : ''}
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+  <Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/>
+</Types>`
+  );
+
+  zip.file(
+    'word/_rels/document.xml.rels',
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/styles" Target="styles.xml"/>
+  ${mediaRels
+    .map(
+      (m) =>
+        `<Relationship Id="${m.rId}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/image" Target="${m.target}"/>`
+    )
+    .join('\n  ')}
+</Relationships>`
+  );
+
   // 6. Complete word/document.xml
   const documentXml = `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
-<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main" xmlns:r="http://schemas.openxmlformats.org/officeDocument/2006/relationships" xmlns:wp="http://schemas.openxmlformats.org/drawingml/2006/wordprocessingDrawing" xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:pic="http://schemas.openxmlformats.org/drawingml/2006/picture">
   <w:body>
     ${bodyXml}
     <w:sectPr>

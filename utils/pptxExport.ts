@@ -1,5 +1,6 @@
 import PptxGenJS from 'pptxgenjs';
 import { AcademicDocument } from '../types';
+import { renderVisualBlockToPng } from './visualRenderer';
 
 function cleanText(raw: string): string {
   return raw
@@ -48,6 +49,9 @@ export async function generatePptxBlob(doc: AcademicDocument): Promise<Blob> {
   pptx.layout = 'LAYOUT_WIDE';
   pptx.title = doc.title;
   pptx.author = doc.metadata?.studentName || 'KorsIQ';
+
+  const designStyle = doc.metadata?.visualPreferences?.designStyle || 'classic_academic';
+  const slideFont = designStyle === 'classic_academic' ? 'Georgia' : 'Arial';
 
   // 1. Title Slide
   const titleSlide = pptx.addSlide();
@@ -138,9 +142,97 @@ export async function generatePptxBlob(doc: AcademicDocument): Promise<Blob> {
           fontSize: 16,
           color: '1F2937',
           valign: 'top',
-          fontFace: 'Arial',
+          fontFace: slideFont,
         }
       );
+    }
+
+    // Optional visual slides for this section (only when generated/enabled)
+    if (Array.isArray(section.visuals) && section.visuals.length > 0) {
+      for (const vis of section.visuals) {
+        const vSlide = pptx.addSlide();
+        vSlide.background = { color: 'FFFFFF' };
+
+        vSlide.addText(`${section.title}: ${vis.title}`, {
+          x: 0.7,
+          y: 0.45,
+          w: 11.9,
+          h: 0.6,
+          fontSize: 21,
+          bold: true,
+          color: '111827',
+          fontFace: slideFont,
+        });
+
+        vSlide.addShape(pptx.ShapeType.rect, {
+          x: 0.7,
+          y: 1.12,
+          w: 1.4,
+          h: 0.06,
+          fill: { color: '2563EB' },
+        });
+
+        if (vis.kind === 'comparison_table' && vis.headers && vis.rows && vis.rows.length > 0) {
+          const tableData = [
+            vis.headers.map((h) => ({
+              text: h,
+              options: { bold: true, color: 'FFFFFF', fill: { color: '2563EB' } },
+            })),
+            ...vis.rows.map((row, rIdx) =>
+              vis.headers!.map((_, cIdx) => ({
+                text: String(row[cIdx] ?? ''),
+                options: { color: '111827', fill: { color: rIdx % 2 === 0 ? 'FFFFFF' : 'F8FAFC' } },
+              }))
+            ),
+          ];
+          vSlide.addTable(tableData, {
+            x: 0.7,
+            y: 1.35,
+            w: 11.9,
+            fontSize: 12,
+            fontFace: slideFont,
+            border: { type: 'solid', pt: 1, color: 'CBD5E1' },
+            margin: 6,
+          });
+        } else {
+          const rendered = renderVisualBlockToPng(vis, designStyle);
+          if (rendered) {
+            const maxW = 11.4;
+            const maxH = 5.0;
+            const aspect = rendered.width / rendered.height;
+            let drawW = maxW;
+            let drawH = drawW / aspect;
+            if (drawH > maxH) {
+              drawH = maxH;
+              drawW = drawH * aspect;
+            }
+            const drawX = (13.333 - drawW) / 2;
+            const drawY = 1.35 + (maxH - drawH) / 2;
+
+            vSlide.addImage({
+              data: rendered.dataUrl,
+              x: drawX,
+              y: drawY,
+              w: drawW,
+              h: drawH,
+            });
+          }
+        }
+
+        if (vis.caption) {
+          vSlide.addText(vis.caption, {
+            x: 0.7,
+            y: 6.65,
+            w: 11.9,
+            h: 0.45,
+            fontSize: 11,
+            italic: true,
+            color: '4B5563',
+            align: 'center',
+            fontFace: slideFont,
+          });
+        }
+      }
     }
   }
 

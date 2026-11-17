@@ -504,6 +504,65 @@ export interface StudioCitation {
   formattedCitation: string;
 }
 
+export type StudioDesignStyle =
+  | 'classic_academic'
+  | 'modern_professional'
+  | 'infographic'
+  | 'creative_visual';
+
+export type StudioVisualIntensity = 'minimal' | 'balanced' | 'visual_rich';
+
+export type StudioVisualBlockKind =
+  | 'infographic'
+  | 'diagram'
+  | 'flowchart'
+  | 'chart'
+  | 'illustration'
+  | 'icon_callout'
+  | 'comparison_table';
+
+export interface StudioVisualBlock {
+  id: string;
+  kind: StudioVisualBlockKind;
+  title: string;
+  caption?: string;
+  items?: Array<{
+    label: string;
+    detail?: string;
+    icon?: string;
+  }>;
+  steps?: Array<{
+    id: string;
+    label: string;
+    detail?: string;
+  }>;
+  chartType?: 'bar' | 'line';
+  xLabel?: string;
+  yLabel?: string;
+  dataPoints?: Array<{
+    label: string;
+    value: number;
+    unit?: string;
+  }>;
+  headers?: string[];
+  rows?: string[][];
+}
+
+export interface StudioVisualPreferences {
+  customized: boolean;
+  designStyle: StudioDesignStyle;
+  intensity: StudioVisualIntensity;
+  enabledElements: {
+    infographics: boolean;
+    diagrams: boolean;
+    flowcharts: boolean;
+    charts: boolean;
+    illustrations: boolean;
+    icons: boolean;
+    comparisonTables: boolean;
+  };
+}
+
 export interface StudioSection {
   id: string;
   outlineItemId: string;
@@ -511,6 +570,7 @@ export interface StudioSection {
   level: 1 | 2 | 3;
   order: number;
   content: string;
+  visuals?: StudioVisualBlock[];
   status: 'empty' | 'generating' | 'drafted' | 'approved';
   wordCount: number;
   citations: StudioCitation[];
@@ -569,6 +629,7 @@ export interface AcademicDocumentMetadata {
   includeAppendices?: boolean;
   preferredFormat?: 'docx' | 'pdf' | 'pptx' | 'other';
   otherFormatLabel?: string;
+  visualPreferences?: StudioVisualPreferences;
 }
 
 export interface AcademicDocument {
