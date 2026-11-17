@@ -1,8 +1,8 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Course, StudyHubData, LibraryFile, Flashcard, QuizQuestion, StudyGroup, UserProfile, GroupMessage, AppNotification, AppState, UserFile } from '../types';
+import { Course, StudyHubData, StudyHubHistoryItem, StudyHubToolType, LibraryFile, Flashcard, QuizQuestion, StudyGroup, UserProfile, GroupMessage, AppNotification, AppState, UserFile } from '../types';
 import { ICONS } from '../constants';
-import { BookOpen as Sparkles, AudioWaveform, ChevronLeft, ChevronRight, RefreshCw, Layers, Grid, Check, X, HelpCircle, Trophy, Award, RotateCcw, Trash2, Folder, Download, Upload, Loader2, AlertCircle, FileText, File, ScanText, Camera, Image, FileSearch, CheckCircle2, ArrowUpRight, BookOpen, Plus, MessageSquare, Link as LinkIcon } from 'lucide-react';
+import { BookOpen as Sparkles, AudioWaveform, ChevronLeft, ChevronRight, RefreshCw, Layers, Grid, Check, X, HelpCircle, Trophy, Award, RotateCcw, Trash2, Folder, Download, Upload, Loader2, AlertCircle, FileText, File, ScanText, Camera, Image, FileSearch, CheckCircle2, ArrowUpRight, BookOpen, Plus, MessageSquare, Link as LinkIcon, Play, Pause, Square, History, Volume2 } from 'lucide-react';
 import { BILLING_ENABLED } from '../lib/plans';
 import { GeminiService } from '../services/gemini';
 import { DBService } from '../services/db';
@@ -116,6 +116,259 @@ const StudyHub: React.FC<StudyHubProps> = ({
   const [podcastAudioNotice, setPodcastAudioNotice] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
+  // Web Speech Podcast Dialogue Player State
+  const [isPodcastPlaying, setIsPodcastPlaying] = useState(false);
+  const [isPodcastPaused, setIsPodcastPaused] = useState(false);
+  const [podcastLineIndex, setPodcastLineIndex] = useState<number | null>(null);
+  const [podcastRate, setPodcastRate] = useState<number>(1);
+  const podcastPlaybackTokenRef = useRef(0);
+
+  // Study Hub Generation History State
+  const [hubHistory, setHubHistory] = useState<StudyHubHistoryItem[]>([]);
+  const [showToolHistory, setShowToolHistory] = useState(false);
+
+  const stopPodcastPlayback = () => {
+    podcastPlaybackTokenRef.current += 1;
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+    }
+    setIsPodcastPlaying(false);
+    setIsPodcastPaused(false);
+    setPodcastLineIndex(null);
+  };
+
+  useEffect(() => {
+    setShowToolHistory(false);
+  }, [activeTool, activeCourseId]);
+
+  useEffect(() => {
+    return () => {
+      stopPodcastPlayback();
+    };
+  }, [activeCourseId]);
+
+  useEffect(() => {
+    const uid = getCurrentUserId();
+    if (!uid || !activeCourseId) {
+      setHubHistory([]);
+      return;
+    }
+    let cancelled = false;
+    DBService.getHubHistory(uid, activeCourseId).then((items) => {
+      if (!cancelled) setHubHistory(items);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeCourseId]);
+
+  const parsePodcastLines = (transcript: string): Array<{ speaker: string; text: string }> => {
+    return transcript
+      .split('\n')
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((line) => {
+        if (/^alex:/i.test(line)) {
+          return { speaker: 'Alex', text: line.replace(/^alex:/i, '').trim() };
+        }
+        if (/^(dr\.?\s*taylor|jane):/i.test(line)) {
+          return { speaker: 'Dr. Taylor', text: line.replace(/^(dr\.?\s*taylor|jane):/i, '').trim() };
+        }
+        return { speaker: 'Host', text: line };
+      })
+      .filter((item) => item.text.length > 0);
+  };
+
+  const startPodcastPlayback = (transcript: string, startFromIndex = 0, rateOverride?: number) => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      setPodcastAudioNotice('Your browser does not support built-in voice playback. Please read the script below.');
+      return;
+    }
+    const lines = parsePodcastLines(transcript);
+    if (lines.length === 0) return;
+
+    window.speechSynthesis.cancel();
+    const token = ++podcastPlaybackTokenRef.current;
+    const rate = rateOverride ?? podcastRate;
+    const voices = window.speechSynthesis.getVoices();
+    const englishVoices = voices.filter((v) => v.lang.toLowerCase().startsWith('en'));
+    const alexVoice = englishVoices[0] || voices[0] || null;
+    const taylorVoice = englishVoices[1] || englishVoices[0] || voices[0] || null;
+
+    setIsPodcastPlaying(true);
+    setIsPodcastPaused(false);
+
+    const speakIndex = (idx: number) => {
+      if (podcastPlaybackTokenRef.current !== token) return;
+      if (idx >= lines.length) {
+        setIsPodcastPlaying(false);
+        setIsPodcastPaused(false);
+        setPodcastLineIndex(null);
+        return;
+      }
+
+      const line = lines[idx];
+      setPodcastLineIndex(idx);
+      const utterance = new SpeechSynthesisUtterance(line.text);
+      utterance.rate = rate;
+      utterance.pitch = line.speaker === 'Dr. Taylor' ? 1.08 : 0.94;
+      if (line.speaker === 'Dr. Taylor' && taylorVoice) {
+        utterance.voice = taylorVoice;
+      } else if (alexVoice) {
+        utterance.voice = alexVoice;
+      }
+
+      utterance.onend = () => {
+        if (podcastPlaybackTokenRef.current !== token) return;
+        speakIndex(idx + 1);
+      };
+      utterance.onerror = () => {
+        if (podcastPlaybackTokenRef.current !== token) return;
+        setIsPodcastPlaying(false);
+        setIsPodcastPaused(false);
+        setPodcastLineIndex(null);
+      };
+
+      window.speechSynthesis.speak(utterance);
+    };
+
+    speakIndex(Math.max(0, Math.min(startFromIndex, lines.length - 1)));
+  };
+
+  const togglePodcastPause = () => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) return;
+    if (isPodcastPaused) {
+      window.speechSynthesis.resume();
+      setIsPodcastPaused(false);
+    } else if (isPodcastPlaying) {
+      window.speechSynthesis.pause();
+      setIsPodcastPaused(true);
+    }
+  };
+
+  const recordHistory = async (
+    toolType: StudyHubToolType,
+    payload: Partial<Pick<StudyHubHistoryItem, 'summary' | 'flashcards' | 'quizzes' | 'tests' | 'transcript' | 'podcastUrl'>>,
+    customTitle?: string
+  ) => {
+    const uid = getCurrentUserId();
+    if (!uid || !activeCourseId) return;
+    const baseLabel = activeHub.fileName || currentCourse?.code || 'Course Material';
+    const title = customTitle || `${baseLabel}`;
+    const saved = await DBService.addHubHistoryItem(uid, {
+      courseId: activeCourseId,
+      toolType,
+      title,
+      ...payload,
+    });
+    setHubHistory((prev) => [saved, ...prev].slice(0, 50));
+  };
+
+  const loadHistoryItem = (item: StudyHubHistoryItem) => {
+    stopPodcastPlayback();
+    const updatedHub: StudyHubData = { ...activeHub };
+    if (item.toolType === 'summary' && item.summary) {
+      updatedHub.summary = item.summary;
+    } else if (item.toolType === 'flashcards' && item.flashcards) {
+      updatedHub.flashcards = item.flashcards;
+      setCurrentCardIndex(0);
+      setIsCardFlipped(false);
+    } else if (item.toolType === 'quiz' && item.quizzes) {
+      updatedHub.quizzes = item.quizzes;
+      setSelectedAnswers({});
+      setQuizScore(null);
+    } else if (item.toolType === 'test' && item.tests) {
+      updatedHub.tests = item.tests;
+      setSelectedTestAnswers({});
+      setIsTestSubmitted(false);
+      setTestTimeRemaining(1800);
+    } else if (item.toolType === 'podcast' && item.transcript) {
+      updatedHub.transcript = item.transcript;
+      updatedHub.podcastUrl = item.podcastUrl;
+    }
+    setHubs((prev) => ({ ...prev, [activeCourseId]: updatedHub }));
+    DBService.saveHub(updatedHub);
+    setShowToolHistory(false);
+  };
+
+  const deleteHistoryItem = async (item: StudyHubHistoryItem) => {
+    const uid = getCurrentUserId();
+    if (!uid || !activeCourseId) return;
+    setHubHistory((prev) => prev.filter((i) => i.id !== item.id));
+    await DBService.deleteHubHistoryItem(uid, activeCourseId, item.id);
+  };
+
+  const renderHistoryButton = (toolType: StudyHubToolType) => {
+    const count = hubHistory.filter((h) => h.toolType === toolType).length;
+    if (count === 0) return null;
+    return (
+      <button
+        type="button"
+        onClick={() => setShowToolHistory((prev) => !prev)}
+        className={`inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-semibold border min-h-[40px] transition-colors cursor-pointer ${
+          showToolHistory
+            ? 'bg-slate-900 text-white border-slate-900'
+            : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50'
+        }`}
+      >
+        <History size={14} />
+        <span>History ({count})</span>
+      </button>
+    );
+  };
+
+  const renderToolHistoryPanel = (toolType: StudyHubToolType) => {
+    if (!showToolHistory) return null;
+    const items = hubHistory.filter((h) => h.toolType === toolType);
+    if (items.length === 0) return null;
+
+    return (
+      <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5 animate-in fade-in duration-200">
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-bold uppercase tracking-wider text-slate-500">
+            Saved {toolType === 'podcast' ? 'Podcasts' : toolType === 'quiz' ? 'Quizzes' : toolType === 'summary' ? 'Summaries' : toolType === 'test' ? 'Practice Tests' : 'Flashcard Decks'} ({items.length})
+          </p>
+          <button
+            type="button"
+            onClick={() => setShowToolHistory(false)}
+            className="text-xs text-slate-500 hover:text-slate-800 cursor-pointer"
+          >
+            Close
+          </button>
+        </div>
+        <div className="divide-y divide-slate-200 bg-white border border-slate-200 rounded-lg overflow-hidden max-h-64 overflow-y-auto">
+          {items.map((item) => (
+            <div key={item.id} className="flex items-center justify-between gap-3 px-3.5 py-2.5 hover:bg-slate-50">
+              <div className="min-w-0">
+                <p className="text-xs font-semibold text-slate-800 truncate">{item.title}</p>
+                <p className="text-[11px] text-slate-500">
+                  {new Date(item.createdAt).toLocaleString([], { dateStyle: 'medium', timeStyle: 'short' })}
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => loadHistoryItem(item)}
+                  className="px-2.5 py-1.5 bg-blue-600 hover:bg-blue-700 text-white rounded-md text-[11px] font-semibold cursor-pointer"
+                >
+                  Open
+                </button>
+                <button
+                  type="button"
+                  onClick={() => deleteHistoryItem(item)}
+                  className="p-1.5 text-slate-400 hover:text-rose-600 rounded-md cursor-pointer"
+                  title="Delete from history"
+                >
+                  <Trash2 size={13} />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  };
+
   // Document Scanner Vision State
   const [isScanningDoc, setIsScanningDoc] = useState(false);
   const [scannedDocPreview, setScannedDocPreview] = useState<string | null>(null);
@@ -222,6 +475,9 @@ const StudyHub: React.FC<StudyHubProps> = ({
 
       setHubs(prev => ({ ...prev, [activeCourseId]: updatedHub }));
       await DBService.saveHub(updatedHub);
+      if (summaryText) {
+        recordHistory('summary', { summary: summaryText }, derivedTitle);
+      }
       addNotification('content', 'Link Imported', `Extracted and summarized ${derivedTitle}.`, 'hub');
       setActiveTool('summary');
     } catch (err: any) {
@@ -663,6 +919,9 @@ const StudyHub: React.FC<StudyHubProps> = ({
 
     setHubs(prev => ({ ...prev, [activeCourseId]: updatedHub }));
     DBService.saveHub(updatedHub);
+    if (newSummary) recordHistory('summary', { summary: newSummary }, 'Scanned Notes Summary');
+    if (newFlashcards.length > 0) recordHistory('flashcards', { flashcards: newFlashcards }, 'Scanned Notes Flashcards');
+    if (newQuiz.length > 0) recordHistory('quiz', { quizzes: newQuiz }, 'Scanned Notes Quiz');
     addNotification('content', 'Hub Updated', 'Scanned notes, flashcards & quiz committed to current course Study Hub!', 'hub');
     setActiveTool('summary');
   };
@@ -683,6 +942,7 @@ const StudyHub: React.FC<StudyHubProps> = ({
       const updatedHub = { ...activeHub, [hubField]: data } as StudyHubData;
       setHubs({ ...hubs, [activeCourseId]: updatedHub });
       await DBService.saveHub(updatedHub);
+      recordHistory(type, { [hubField]: data });
       addNotification('content', `${type.toUpperCase()} Ready`, `Your ${type} for ${currentCourse?.code} has been generated.`, 'hub');
     } catch (err: any) {
       console.error(err);
@@ -710,6 +970,7 @@ const StudyHub: React.FC<StudyHubProps> = ({
     setLoading(true);
     try {
       const res = await GeminiService.generatePodcast(source);
+      stopPodcastPlayback();
       const updatedHub = {
         ...activeHub,
         podcastUrl: res.wavUrl || undefined,
@@ -717,12 +978,12 @@ const StudyHub: React.FC<StudyHubProps> = ({
       } as StudyHubData;
       setHubs({ ...hubs, [activeCourseId]: updatedHub });
       await DBService.saveHub(updatedHub);
-      if (res.audioFailed) {
-        setPodcastAudioNotice(res.audioError || 'Audio synthesis was unable to render the voice track. Your transcript is ready below and 0 credits were charged.');
-      } else {
-        setPodcastAudioNotice(null);
-        addNotification('content', 'AI Podcast Ready', `Your audio overview for ${currentCourse?.code} has been generated.`, 'hub');
-      }
+      recordHistory('podcast', {
+        transcript: res.script,
+        podcastUrl: res.audioUrl && !res.audioUrl.startsWith('blob:') ? res.audioUrl : undefined
+      });
+      setPodcastAudioNotice(null);
+      addNotification('content', 'AI Podcast Ready', `Your audio overview for ${currentCourse?.code} has been generated.`, 'hub');
     } catch (err: any) {
       console.error(err);
       if (err?.status === 402 || err?.code === 'INSUFFICIENT_CREDITS') {
@@ -1192,7 +1453,13 @@ const StudyHub: React.FC<StudyHubProps> = ({
               activeCourse={currentCourse}
               activeHub={activeHub}
             />
-          ) : !isSessionFileActive && activeTool !== 'library' ? (
+          ) : !isSessionFileActive && activeTool !== 'library' && !(
+            (activeTool === 'summary' && (Boolean(activeHub.summary) || hubHistory.some((h) => h.toolType === 'summary'))) ||
+            (activeTool === 'flashcards' && (Boolean(activeHub.flashcards?.length) || hubHistory.some((h) => h.toolType === 'flashcards'))) ||
+            (activeTool === 'quiz' && (Boolean(activeHub.quizzes?.length) || hubHistory.some((h) => h.toolType === 'quiz'))) ||
+            (activeTool === 'test' && (Boolean(activeHub.tests?.length) || hubHistory.some((h) => h.toolType === 'test'))) ||
+            (activeTool === 'podcast' && (Boolean(activeHub.transcript) || hubHistory.some((h) => h.toolType === 'podcast')))
+          ) ? (
             <div className="h-full flex flex-col items-center justify-center text-center p-8 animate-in fade-in duration-300 min-h-[380px]">
               <div className="p-4 bg-blue-50 rounded-xl mb-4 text-blue-600 border border-blue-100 shadow-2xs">
                 <Sparkles size={28} />
@@ -1214,17 +1481,23 @@ const StudyHub: React.FC<StudyHubProps> = ({
             </div>
           ) : (
             <div className="page-transition">
-            {activeTool === 'summary' && activeHub.summary && (
-              <div className="space-y-12">
-                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 pb-10 gap-4">
+            {activeTool === 'summary' && (activeHub.summary || hubHistory.some((h) => h.toolType === 'summary')) && (
+              <div className="space-y-8">
+                <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 pb-6 gap-4">
                   <h3 className="text-3xl sm:text-4xl font-serif font-bold tracking-tight text-slate-900">Executive Summary</h3>
-                  <button onClick={() => generateTool('summary')} className="flex items-center gap-3 text-xs font-bold uppercase tracking-widest text-blue-700 hover:text-blue-800 transition-all p-3 bg-blue-50 rounded-xl border border-blue-100 cursor-pointer">
-                     <span className="group-hover:rotate-180 transition-transform duration-700">{ICONS.RotateCcw}</span> {BILLING_ENABLED ? 'Regenerate — 1 credit' : 'Regenerate'}
-                  </button>
+                  <div className="flex items-center gap-2 flex-wrap">
+                    {renderHistoryButton('summary')}
+                    <button onClick={() => generateTool('summary')} className="flex items-center gap-3 text-xs font-bold uppercase tracking-widest text-blue-700 hover:text-blue-800 transition-all p-3 bg-blue-50 rounded-xl border border-blue-100 cursor-pointer">
+                       <span className="group-hover:rotate-180 transition-transform duration-700">{ICONS.RotateCcw}</span> {BILLING_ENABLED ? 'Regenerate — 1 credit' : 'Regenerate'}
+                    </button>
+                  </div>
                 </div>
-                <div className="prose max-w-none text-slate-700 text-lg sm:text-xl leading-[1.7] space-y-8 font-medium prose-slate prose-p:leading-relaxed prose-headings:font-serif">
-                  <ReactMarkdown>{activeHub.summary}</ReactMarkdown>
-                </div>
+                {renderToolHistoryPanel('summary')}
+                {activeHub.summary && (
+                  <div className="prose max-w-none text-slate-700 text-lg sm:text-xl leading-[1.7] space-y-8 font-medium prose-slate prose-p:leading-relaxed prose-headings:font-serif">
+                    <ReactMarkdown>{activeHub.summary}</ReactMarkdown>
+                  </div>
+                )}
               </div>
             )}
 
@@ -1444,7 +1717,8 @@ const StudyHub: React.FC<StudyHubProps> = ({
                       <p className="text-xs text-slate-500 font-medium">Click a card to reveal its answer and definitions.</p>
                     </div>
                     
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      {renderHistoryButton('flashcards')}
                       <div className="bg-slate-100/80 p-1 rounded-xl flex items-center border border-slate-200">
                         <button 
                           onClick={() => setFlashcardViewMode('deck')}
@@ -1471,6 +1745,7 @@ const StudyHub: React.FC<StudyHubProps> = ({
                       </button>
                     </div>
                   </div>
+                  {renderToolHistoryPanel('flashcards')}
 
                   {flashcardViewMode === 'deck' ? (
                     <div className="space-y-8 animate-in fade-in duration-500 max-w-xl mx-auto">
@@ -1579,7 +1854,8 @@ const StudyHub: React.FC<StudyHubProps> = ({
                       <h3 className="text-2xl sm:text-3xl font-serif font-bold tracking-tight text-slate-900">Academic Assessment</h3>
                       <p className="text-xs text-slate-500 font-medium">Test your knowledge. Answer questions inline to receive analytical feedback.</p>
                     </div>
-                    <div className="flex items-center gap-4">
+                    <div className="flex items-center gap-4 flex-wrap">
+                      {renderHistoryButton('quiz')}
                       <div className="text-right hidden sm:block">
                         <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Progress</p>
                         <p className="text-sm font-bold text-slate-800">{answeredCount} of {totalQuestions} Answered</p>
@@ -1596,6 +1872,7 @@ const StudyHub: React.FC<StudyHubProps> = ({
                       </button>
                     </div>
                   </div>
+                  {renderToolHistoryPanel('quiz')}
 
                   {/* Active overall linear stats progress bar */}
                   <div className="space-y-2">
@@ -1767,16 +2044,19 @@ const StudyHub: React.FC<StudyHubProps> = ({
                       <h3 className="text-2xl sm:text-3xl font-serif font-bold tracking-tight text-slate-900">Practice Test Simulator</h3>
                       <p className="text-xs text-slate-500 font-medium font-sans">Timed mock exam simulating real-world university evaluation. Real-time feedback is hidden until submission.</p>
                     </div>
-                    
-                    {!isTestSubmitted && isTestActive && (
-                      <div className="flex items-center gap-4 bg-rose-50 border border-rose-100 px-6 py-3 rounded-2xl shrink-0">
-                        <div className="w-2.5 h-2.5 rounded-full bg-rose-600 animate-pulse" />
-                        <div className="font-mono font-bold text-rose-700 text-lg leading-none">
-                          {formattedTime}
+                    <div className="flex items-center gap-3 flex-wrap">
+                      {renderHistoryButton('test')}
+                      {!isTestSubmitted && isTestActive && (
+                        <div className="flex items-center gap-4 bg-rose-50 border border-rose-100 px-6 py-3 rounded-2xl shrink-0">
+                          <div className="w-2.5 h-2.5 rounded-full bg-rose-600 animate-pulse" />
+                          <div className="font-mono font-bold text-rose-700 text-lg leading-none">
+                            {formattedTime}
+                          </div>
                         </div>
-                      </div>
-                    )}
+                      )}
+                    </div>
                   </div>
+                  {renderToolHistoryPanel('test')}
 
                   {!isTestActive && !isTestSubmitted ? (
                     <div className="bg-slate-50 border border-slate-200 p-8 rounded-xl text-center space-y-4 max-w-lg mx-auto shadow-2xs">
@@ -1999,8 +2279,10 @@ const StudyHub: React.FC<StudyHubProps> = ({
               </div>
             )}
 
-            {activeTool === 'podcast' && (
-              <div className="space-y-8 animate-in fade-in duration-300">
+            {activeTool === 'podcast' && (() => {
+              const podcastLines = activeHub.transcript ? parsePodcastLines(activeHub.transcript) : [];
+              return (
+              <div className="space-y-6 animate-in fade-in duration-300">
                 <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center border-b border-slate-100 pb-6 gap-4">
                   <div>
                     <h3 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900">AI Podcast Overview</h3>
@@ -2008,16 +2290,21 @@ const StudyHub: React.FC<StudyHubProps> = ({
                       Generate a two-host academic audio overview and transcript from your course material.
                     </p>
                   </div>
-                  <button
-                    type="button"
-                    onClick={generatePodcastTool}
-                    className="px-4 py-2.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg text-xs font-semibold min-h-[44px] cursor-pointer shrink-0"
-                  >
-                    {BILLING_ENABLED
-                      ? (activeHub.transcript ? 'Regenerate AI Podcast — 6 credits' : 'AI Podcast — 6 credits')
-                      : (activeHub.transcript ? 'Regenerate AI Podcast' : 'AI Podcast')}
-                  </button>
+                  <div className="flex items-center gap-2 flex-wrap shrink-0">
+                    {renderHistoryButton('podcast')}
+                    <button
+                      type="button"
+                      onClick={generatePodcastTool}
+                      className="px-4 py-2.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg text-xs font-semibold min-h-[44px] cursor-pointer"
+                    >
+                      {BILLING_ENABLED
+                        ? (activeHub.transcript ? 'Regenerate AI Podcast — 6 credits' : 'AI Podcast — 6 credits')
+                        : (activeHub.transcript ? 'Regenerate AI Podcast' : 'AI Podcast')}
+                    </button>
+                  </div>
                 </div>
+
+                {renderToolHistoryPanel('podcast')}
 
                 {podcastAudioNotice && (
                   <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs text-amber-900">
@@ -2035,18 +2322,116 @@ const StudyHub: React.FC<StudyHubProps> = ({
                   </div>
                 )}
 
-                {activeHub.podcastUrl && (
-                  <div className="p-4 bg-slate-50 border border-slate-200 rounded-xl space-y-2">
-                    <p className="text-xs font-semibold text-slate-700">Audio Stream</p>
-                    <audio ref={audioRef} controls src={activeHub.podcastUrl} className="w-full" />
+                {activeHub.transcript && podcastLines.length > 0 && (
+                  <div className="p-4 sm:p-5 bg-slate-900 text-white rounded-xl space-y-4 shadow-sm">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div className="flex items-center gap-3">
+                        <div className={`w-10 h-10 rounded-full flex items-center justify-center ${isPodcastPlaying && !isPodcastPaused ? 'bg-blue-500 animate-pulse' : 'bg-slate-800'}`}>
+                          <Volume2 size={18} />
+                        </div>
+                        <div>
+                          <p className="text-xs font-bold uppercase tracking-wider text-blue-300">
+                            {isPodcastPlaying
+                              ? (isPodcastPaused ? 'Paused' : `Speaking: ${podcastLines[podcastLineIndex ?? 0]?.speaker || 'Host'}`)
+                              : 'Two-Host Voice Player'}
+                          </p>
+                          <p className="text-xs text-slate-300">
+                            {isPodcastPlaying && podcastLineIndex !== null
+                              ? `Line ${podcastLineIndex + 1} of ${podcastLines.length}`
+                              : `${podcastLines.length} dialogue lines ready to play`}
+                          </p>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {!isPodcastPlaying ? (
+                          <button
+                            type="button"
+                            onClick={() => startPodcastPlayback(activeHub.transcript || '', 0)}
+                            className="inline-flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold min-h-[40px] cursor-pointer"
+                          >
+                            <Play size={14} />
+                            <span>Play Voice</span>
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={togglePodcastPause}
+                              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg text-xs font-semibold min-h-[40px] cursor-pointer"
+                            >
+                              {isPodcastPaused ? <Play size={14} /> : <Pause size={14} />}
+                              <span>{isPodcastPaused ? 'Resume' : 'Pause'}</span>
+                            </button>
+                            <button
+                              type="button"
+                              onClick={stopPodcastPlayback}
+                              className="inline-flex items-center gap-1.5 px-3 py-2 bg-slate-800 hover:bg-slate-700 text-slate-200 rounded-lg text-xs font-semibold min-h-[40px] cursor-pointer"
+                            >
+                              <Square size={13} />
+                              <span>Stop</span>
+                            </button>
+                          </>
+                        )}
+
+                        <select
+                          aria-label="Podcast playback speed"
+                          value={podcastRate}
+                          onChange={(e) => {
+                            const nextRate = Number(e.target.value) || 1;
+                            setPodcastRate(nextRate);
+                            if (isPodcastPlaying && podcastLineIndex !== null) {
+                              startPodcastPlayback(activeHub.transcript || '', podcastLineIndex, nextRate);
+                            }
+                          }}
+                          className="bg-slate-800 border border-slate-700 text-slate-200 text-xs font-semibold rounded-lg px-2.5 py-2 min-h-[40px] cursor-pointer"
+                        >
+                          <option value={0.85}>0.85x</option>
+                          <option value={1}>1.0x</option>
+                          <option value={1.25}>1.25x</option>
+                          <option value={1.5}>1.5x</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    {isPodcastPlaying && podcastLineIndex !== null && (
+                      <div className="w-full bg-slate-800 h-1.5 rounded-full overflow-hidden">
+                        <div
+                          className="bg-blue-500 h-full transition-all duration-300"
+                          style={{ width: `${Math.round(((podcastLineIndex + 1) / podcastLines.length) * 100)}%` }}
+                        />
+                      </div>
+                    )}
                   </div>
                 )}
 
                 {activeHub.transcript ? (
                   <div className="p-5 bg-white border border-slate-200 rounded-xl space-y-3 max-h-[420px] overflow-y-auto">
-                    <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Podcast Script</p>
-                    <div className="text-xs sm:text-sm text-slate-700 whitespace-pre-wrap leading-relaxed">
-                      {activeHub.transcript}
+                    <div className="flex items-center justify-between">
+                      <p className="text-xs font-bold uppercase tracking-wider text-slate-400">Podcast Script</p>
+                      <span className="text-[11px] text-slate-400">Click any line to play from there</span>
+                    </div>
+                    <div className="space-y-2.5">
+                      {podcastLines.map((line, idx) => {
+                        const isActiveLine = isPodcastPlaying && podcastLineIndex === idx;
+                        return (
+                          <button
+                            key={idx}
+                            type="button"
+                            onClick={() => startPodcastPlayback(activeHub.transcript || '', idx)}
+                            className={`w-full text-left p-3 rounded-lg border transition-colors cursor-pointer ${
+                              isActiveLine
+                                ? 'bg-blue-50 border-blue-300 text-slate-900'
+                                : 'bg-slate-50/60 border-transparent hover:bg-slate-100 text-slate-700'
+                            }`}
+                          >
+                            <span className={`text-xs font-bold mr-2 ${line.speaker === 'Dr. Taylor' ? 'text-indigo-600' : 'text-blue-600'}`}>
+                              {line.speaker}:
+                            </span>
+                            <span className="text-xs sm:text-sm leading-relaxed">{line.text}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
                 ) : (
@@ -2060,7 +2445,8 @@ const StudyHub: React.FC<StudyHubProps> = ({
                   </div>
                 )}
               </div>
-            )}
+              );
+            })()}
 
             {activeTool === 'library' && (
               <div className="space-y-10 animate-in fade-in duration-500">

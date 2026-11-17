@@ -5,6 +5,8 @@ import {
   StudySession,
   StudyGroup,
   StudyHubData,
+  StudyHubHistoryItem,
+  StudyHubToolType,
   Difficulty,
   SubscriptionTier,
   UserFile,
@@ -788,6 +790,106 @@ export const DBService = {
     } catch (err: any) {
       console.warn('deleteHub error:', err);
       return { success: false, error: err?.message || 'Failed to delete study hub data.' };
+    }
+  },
+
+  async getHubHistory(userId: string, courseId: string): Promise<StudyHubHistoryItem[]> {
+    if (!userId || !courseId) return [];
+    const cacheName = `hub_history_${courseId}`;
+    const cached = readCache<StudyHubHistoryItem[]>(cacheName, userId, []);
+    try {
+      const { data, error } = await supabase
+        .from('study_hub_history')
+        .select('*')
+        .eq('user_id', userId)
+        .eq('course_id', courseId)
+        .order('created_at', { ascending: false })
+        .limit(50);
+      if (error) throw error;
+
+      const items: StudyHubHistoryItem[] = (data || []).map((row: any) => {
+        const c = row.content || {};
+        return {
+          id: row.id,
+          courseId: row.course_id,
+          toolType: row.tool_type as StudyHubToolType,
+          title: row.title || 'Generated Study Asset',
+          createdAt: row.created_at || new Date().toISOString(),
+          summary: c.summary,
+          flashcards: c.flashcards,
+          quizzes: c.quizzes,
+          tests: c.tests,
+          transcript: c.transcript,
+          podcastUrl: c.podcastUrl,
+        };
+      });
+      writeCache(cacheName, userId, items);
+      return items;
+    } catch (err) {
+      console.warn('getHubHistory fallback to cache:', err);
+      return cached;
+    }
+  },
+
+  async addHubHistoryItem(
+    userId: string,
+    item: Omit<StudyHubHistoryItem, 'id' | 'createdAt'>
+  ): Promise<StudyHubHistoryItem> {
+    const newItem: StudyHubHistoryItem = {
+      ...item,
+      id: `hist_${Date.now()}_${rand(4)}`,
+      createdAt: new Date().toISOString(),
+    };
+    if (!userId) return newItem;
+
+    const cacheName = `hub_history_${item.courseId}`;
+    const cached = readCache<StudyHubHistoryItem[]>(cacheName, userId, []);
+    const nextCache = [newItem, ...cached].slice(0, 50);
+    writeCache(cacheName, userId, nextCache);
+
+    try {
+      const content: Record<string, any> = {};
+      if (item.summary !== undefined) content.summary = item.summary;
+      if (item.flashcards !== undefined) content.flashcards = item.flashcards;
+      if (item.quizzes !== undefined) content.quizzes = item.quizzes;
+      if (item.tests !== undefined) content.tests = item.tests;
+      if (item.transcript !== undefined) content.transcript = item.transcript;
+      if (item.podcastUrl && !item.podcastUrl.startsWith('blob:')) content.podcastUrl = item.podcastUrl;
+
+      await supabase.from('study_hub_history').insert({
+        id: newItem.id,
+        user_id: userId,
+        course_id: item.courseId,
+        tool_type: item.toolType,
+        title: item.title,
+        content,
+        created_at: newItem.createdAt,
+      });
+    } catch (err) {
+      console.warn('addHubHistoryItem DB insert warning:', err);
+    }
+
+    return newItem;
+  },
+
+  async deleteHubHistoryItem(userId: string, courseId: string, itemId: string): Promise<void> {
+    if (!userId || !courseId || !itemId) return;
+    const cacheName = `hub_history_${courseId}`;
+    const cached = readCache<StudyHubHistoryItem[]>(cacheName, userId, []);
+    writeCache(
+      cacheName,
+      userId,
+      cached.filter((i) => i.id !== itemId)
+    );
+
+    try {
+      await supabase
+        .from('study_hub_history')
+        .delete()
+        .eq('id', itemId)
+        .eq('user_id', userId);
+    } catch (err) {
+      console.warn('deleteHubHistoryItem DB delete warning:', err);
     }
   },
 
