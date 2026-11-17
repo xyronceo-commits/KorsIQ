@@ -1794,6 +1794,64 @@ export const DBService = {
     }
   },
 
+  async updateGroupDetails(
+    groupId: string,
+    updates: {
+      name: string;
+      course: string;
+      description: string;
+      type?: 'general' | 'private';
+      department?: string;
+      level?: string;
+      university?: string;
+    },
+    userId: string
+  ): Promise<StudyGroup> {
+    const token = await getAccessToken();
+    const res = await fetch(`/api/circles/${encodeURIComponent(groupId)}`, {
+      method: 'PATCH',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify(updates),
+    });
+
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json?.success || !json?.group) {
+      throw new Error(json?.error || 'Failed to update circle information.');
+    }
+
+    const updatedGroup: StudyGroup = json.group;
+    const list = readCache<StudyGroup[]>('groups', userId, []);
+    const idx = list.findIndex((g) => g.id === groupId);
+    if (idx >= 0) {
+      list[idx] = { ...list[idx], ...updatedGroup };
+    } else {
+      list.unshift(updatedGroup);
+    }
+    writeCache('groups', userId, list);
+    return updatedGroup;
+  },
+
+  async deleteGroup(groupId: string, userId: string): Promise<void> {
+    const token = await getAccessToken();
+    const res = await fetch(`/api/circles/${encodeURIComponent(groupId)}`, {
+      method: 'DELETE',
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+    });
+
+    const json = await res.json().catch(() => ({}));
+    if (!res.ok || !json?.success) {
+      throw new Error(json?.error || 'Failed to delete circle.');
+    }
+
+    const list = readCache<StudyGroup[]>('groups', userId, []);
+    writeCache('groups', userId, list.filter((g) => g.id !== groupId));
+  },
+
   async deleteGroupLocal(groupId: string, userId: string): Promise<void> {
     try {
       await supabase.from('study_groups').delete().eq('id', groupId);

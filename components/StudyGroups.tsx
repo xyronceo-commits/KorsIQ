@@ -35,7 +35,8 @@ import {
   Clock, 
   AlertCircle, 
   ArrowLeft,
-  ChevronDown
+  ChevronDown,
+  Pencil
 } from 'lucide-react';
 import { DBService, generateCircleInviteCode } from '../services/db';
 import { getCurrentUserId, supabase } from '../lib/supabase';
@@ -108,6 +109,72 @@ export const StudyGroups: React.FC<StudyGroupsProps> = ({
 
   // Create & Join Circle Modals
   const [showCreateModal, setShowCreateModal] = useState(false);
+
+  // Edit & Delete Circle Modals (Owner Only)
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editName, setEditName] = useState('');
+  const [editCourse, setEditCourse] = useState('');
+  const [editDesc, setEditDesc] = useState('');
+  const [editType, setEditType] = useState<'general' | 'private'>('private');
+  const [isUpdatingCircle, setIsUpdatingCircle] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+
+  const [showDeleteModal, setShowDeleteModal] = useState(false);
+  const [isDeletingCircle, setIsDeletingCircle] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
+
+  const openEditCircleModal = () => {
+    if (!activeGroup || !isOwner) return;
+    setEditName(activeGroup.name || '');
+    setEditCourse(activeGroup.course || '');
+    setEditDesc(activeGroup.description || '');
+    setEditType(activeGroup.type === 'general' ? 'general' : 'private');
+    setEditError(null);
+    setShowEditModal(true);
+  };
+
+  const handleUpdateCircle = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!activeGroup || !isOwner || isUpdatingCircle) return;
+    setIsUpdatingCircle(true);
+    setEditError(null);
+    try {
+      const updated = await DBService.updateGroupDetails(
+        activeGroup.id,
+        {
+          name: editName.trim(),
+          course: editCourse.trim(),
+          description: editDesc.trim(),
+          type: editType,
+        },
+        currentUserId
+      );
+      setGroups((prev) => prev.map((g) => (g.id === updated.id ? { ...g, ...updated } : g)));
+      setShowEditModal(false);
+      addNotification('message', 'Circle Updated', `"${updated.name}" information has been updated.`);
+    } catch (err: any) {
+      setEditError(err?.message || 'Failed to update circle information.');
+    } finally {
+      setIsUpdatingCircle(false);
+    }
+  };
+
+  const handleDeleteCircle = async () => {
+    if (!activeGroup || !isOwner || isDeletingCircle) return;
+    const target = activeGroup;
+    setIsDeletingCircle(true);
+    setDeleteError(null);
+    try {
+      await DBService.deleteGroup(target.id, currentUserId);
+      setGroups((prev) => prev.filter((g) => g.id !== target.id));
+      setShowDeleteModal(false);
+      addNotification('message', 'Circle Deleted', `"${target.name}" has been deleted.`);
+    } catch (err: any) {
+      setDeleteError(err?.message || 'Failed to delete circle.');
+    } finally {
+      setIsDeletingCircle(false);
+    }
+  };
   const [showJoinModal, setShowJoinModal] = useState(false);
   const [createName, setCreateName] = useState('');
   const [createDesc, setCreateDesc] = useState('');
@@ -643,6 +710,30 @@ export const StudyGroups: React.FC<StudyGroupsProps> = ({
               <Users size={14} />
               <span>Members ({activeGroup.members?.length || 1})</span>
             </button>
+          )}
+
+          {isOwner && activeGroup && (
+            <>
+              <button
+                onClick={openEditCircleModal}
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium rounded-lg min-h-[44px] transition-colors cursor-pointer"
+                title="Edit Circle Information"
+              >
+                <Pencil size={14} />
+                <span>Edit</span>
+              </button>
+              <button
+                onClick={() => {
+                  setDeleteError(null);
+                  setShowDeleteModal(true);
+                }}
+                className="inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-white dark:bg-slate-800 hover:bg-red-50 dark:hover:bg-red-950/40 border border-red-200 dark:border-red-900/60 text-red-600 dark:text-red-400 text-xs font-medium rounded-lg min-h-[44px] transition-colors cursor-pointer"
+                title="Delete or Keep Circle"
+              >
+                <Trash2 size={14} />
+                <span>Delete</span>
+              </button>
+            </>
           )}
 
           {/* Always allow searching & joining other circles, even if user owns a circle */}
@@ -1683,6 +1774,158 @@ export const StudyGroups: React.FC<StudyGroupsProps> = ({
                   </div>
                 );
               })}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 5: Edit Circle Information (Owner Only) */}
+      {showEditModal && activeGroup && isOwner && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Edit Circle Information</h3>
+              <button
+                type="button"
+                onClick={() => setShowEditModal(false)}
+                className="p-1 text-slate-400 hover:text-slate-600 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            {editError && (
+              <div className="p-3 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 text-xs rounded-lg border border-red-200 dark:border-red-900 flex items-center gap-2">
+                <AlertCircle size={14} className="shrink-0" />
+                <span>{editError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleUpdateCircle} className="space-y-3">
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Circle Visibility</label>
+                <div className="flex rounded-lg border border-slate-200 dark:border-slate-800 p-0.5">
+                  <button
+                    type="button"
+                    onClick={() => setEditType('general')}
+                    className={`flex-1 py-2 text-xs font-semibold rounded-md min-h-[44px] flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                      editType === 'general'
+                        ? 'bg-blue-600 text-white'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                    }`}
+                  >
+                    <Globe size={13} />
+                    <span>General / Public</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setEditType('private')}
+                    className={`flex-1 py-2 text-xs font-semibold rounded-md min-h-[44px] flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                      editType === 'private'
+                        ? 'bg-blue-600 text-white'
+                        : 'text-slate-600 dark:text-slate-400 hover:text-slate-900'
+                    }`}
+                  >
+                    <Lock size={13} />
+                    <span>Private (Invite Code)</span>
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Circle Name</label>
+                <input
+                  type="text"
+                  required
+                  value={editName}
+                  onChange={(e) => setEditName(e.target.value)}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-900 dark:text-white outline-none focus:border-blue-500 min-h-[44px]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Course Code</label>
+                <input
+                  type="text"
+                  required
+                  value={editCourse}
+                  onChange={(e) => setEditCourse(e.target.value)}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-900 dark:text-white outline-none focus:border-blue-500 min-h-[44px]"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 dark:text-slate-300 mb-1">Description</label>
+                <textarea
+                  rows={3}
+                  value={editDesc}
+                  onChange={(e) => setEditDesc(e.target.value)}
+                  placeholder="Circle purpose and focus topics..."
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-900 dark:text-white outline-none focus:border-blue-500 resize-none"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowEditModal(false)}
+                  disabled={isUpdatingCircle}
+                  className="px-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 min-h-[44px] transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={isUpdatingCircle || !editName.trim() || !editCourse.trim()}
+                  className="inline-flex items-center justify-center gap-1.5 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg min-h-[44px] transition-colors cursor-pointer disabled:opacity-50"
+                >
+                  {isUpdatingCircle && <Loader2 size={14} className="animate-spin" />}
+                  <span>{isUpdatingCircle ? 'Saving...' : 'Save Changes'}</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL 6: Delete or Keep Circle Confirmation (Owner Only) */}
+      {showDeleteModal && activeGroup && isOwner && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-xl space-y-4">
+            <div className="space-y-1.5">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Delete Study Circle?</h3>
+              <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                Are you sure you want to delete{' '}
+                <span className="font-semibold text-slate-900 dark:text-white">{activeGroup.name}</span>? This will
+                permanently remove the circle, its discussions, messages, and shared materials for all members.
+              </p>
+            </div>
+
+            {deleteError && (
+              <div className="p-3 bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 text-xs rounded-lg border border-red-200 dark:border-red-900 flex items-center gap-2">
+                <AlertCircle size={14} className="shrink-0" />
+                <span>{deleteError}</span>
+              </div>
+            )}
+
+            <div className="flex items-center justify-end gap-2 pt-2">
+              <button
+                type="button"
+                onClick={() => setShowDeleteModal(false)}
+                disabled={isDeletingCircle}
+                className="px-4 py-2.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 min-h-[44px] transition-colors cursor-pointer disabled:opacity-50"
+              >
+                Keep Circle
+              </button>
+              <button
+                type="button"
+                onClick={handleDeleteCircle}
+                disabled={isDeletingCircle}
+                className="inline-flex items-center justify-center gap-1.5 px-4 py-2.5 bg-red-600 hover:bg-red-700 text-white text-xs font-semibold rounded-lg min-h-[44px] transition-colors cursor-pointer disabled:opacity-50"
+              >
+                {isDeletingCircle ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                <span>{isDeletingCircle ? 'Deleting...' : 'Delete Circle'}</span>
+              </button>
             </div>
           </div>
         </div>

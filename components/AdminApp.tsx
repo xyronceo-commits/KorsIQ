@@ -74,6 +74,9 @@ export const AdminApp: React.FC<AdminAppProps> = ({ onExit }) => {
   const [verifyingRef, setVerifyingRef] = useState<string | null>(null);
   const [paymentFeedback, setPaymentFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
   const [circlesList, setCirclesList] = useState<any[]>([]);
+  const [circlesFeedback, setCirclesFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [circleToDelete, setCircleToDelete] = useState<any | null>(null);
+  const [deletingCircleId, setDeletingCircleId] = useState<string | null>(null);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [isDataLoading, setIsDataLoading] = useState(false);
 
@@ -250,6 +253,34 @@ export const AdminApp: React.FC<AdminAppProps> = ({ onExit }) => {
       throw new Error('Admin session expired or access revoked.');
     }
     return await resp.json();
+  };
+
+  const handleDeleteCircle = async () => {
+    if (!circleToDelete || deletingCircleId) return;
+    const target = circleToDelete;
+    setDeletingCircleId(target.id);
+    setCirclesFeedback(null);
+    try {
+      const res = await adminFetch(`/api/admin/circles/${encodeURIComponent(target.id)}`, {
+        method: 'DELETE',
+      });
+      if (!res.success) {
+        throw new Error(res.error || 'Failed to delete circle.');
+      }
+      setCirclesList((prev) => prev.filter((c) => c.id !== target.id));
+      setCirclesFeedback({
+        type: 'success',
+        message: res.message || `Circle "${target.name}" deleted.`,
+      });
+      setCircleToDelete(null);
+    } catch (err: any) {
+      setCirclesFeedback({
+        type: 'error',
+        message: err?.message || 'Failed to delete circle.',
+      });
+    } finally {
+      setDeletingCircleId(null);
+    }
   };
 
   // Load Dashboard Data based on Active Tab
@@ -1024,31 +1055,110 @@ export const AdminApp: React.FC<AdminAppProps> = ({ onExit }) => {
 
         {/* TAB 4: CIRCLES */}
         {!isDataLoading && activeTab === 'circles' && (
-          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
-            <div className="overflow-x-auto">
-              <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 font-semibold uppercase">
-                  <tr>
-                    <th className="px-4 py-3">Circle Name</th>
-                    <th className="px-4 py-3">Course</th>
-                    <th className="px-4 py-3">Type</th>
-                    <th className="px-4 py-3">Members</th>
-                    <th className="px-4 py-3">Created</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
-                  {circlesList.map((c: any) => (
-                    <tr key={c.id}>
-                      <td className="px-4 py-3 font-semibold">{c.name}</td>
-                      <td className="px-4 py-3 font-mono">{c.course}</td>
-                      <td className="px-4 py-3 uppercase text-[10px]">{c.type || 'private'}</td>
-                      <td className="px-4 py-3">{c.member_count || 1}</td>
-                      <td className="px-4 py-3 text-slate-400">{new Date(c.created_at).toLocaleDateString()}</td>
+          <div className="space-y-4">
+            {circlesFeedback && (
+              <div
+                role="status"
+                className={`p-3 rounded-xl border text-xs font-medium flex items-center gap-2 ${
+                  circlesFeedback.type === 'success'
+                    ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-200 dark:border-emerald-900 text-emerald-700 dark:text-emerald-300'
+                    : 'bg-red-50 dark:bg-red-950/40 border-red-200 dark:border-red-900 text-red-700 dark:text-red-300'
+                }`}
+              >
+                {circlesFeedback.type === 'success' ? <CheckCircle2 size={15} /> : <AlertCircle size={15} />}
+                <span>{circlesFeedback.message}</span>
+              </div>
+            )}
+
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="w-full text-left text-xs">
+                  <thead className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-slate-500 font-semibold uppercase">
+                    <tr>
+                      <th className="px-4 py-3">Circle Name</th>
+                      <th className="px-4 py-3">Course</th>
+                      <th className="px-4 py-3">Type</th>
+                      <th className="px-4 py-3">Members</th>
+                      <th className="px-4 py-3">Created</th>
+                      <th className="px-4 py-3 text-right">Actions</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                    {circlesList.length === 0 ? (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-6 text-center text-slate-400">
+                          No study circles found.
+                        </td>
+                      </tr>
+                    ) : (
+                      circlesList.map((c: any) => (
+                        <tr key={c.id} className="hover:bg-slate-50/50 dark:hover:bg-slate-800/40">
+                          <td className="px-4 py-3 font-semibold text-slate-900 dark:text-white">{c.name}</td>
+                          <td className="px-4 py-3 font-mono">{c.course}</td>
+                          <td className="px-4 py-3 uppercase text-[10px]">{c.type || 'private'}</td>
+                          <td className="px-4 py-3">{c.member_count || 1}</td>
+                          <td className="px-4 py-3 text-slate-400">{new Date(c.created_at).toLocaleDateString()}</td>
+                          <td className="px-4 py-3 text-right">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setCirclesFeedback(null);
+                                setCircleToDelete(c);
+                              }}
+                              disabled={deletingCircleId === c.id}
+                              className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 border border-red-200 dark:border-red-900/60 transition-colors cursor-pointer disabled:opacity-50"
+                              title="Delete or keep circle"
+                            >
+                              <Trash2 size={13} />
+                              <span>Delete</span>
+                            </button>
+                          </td>
+                        </tr>
+                      ))
+                    )}
+                  </tbody>
+                </table>
+              </div>
             </div>
+
+            {circleToDelete && (
+              <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+                <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl w-full max-w-md p-6 shadow-xl space-y-4">
+                  <div className="space-y-1.5">
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                      Delete Study Circle?
+                    </h3>
+                    <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
+                      Are you sure you want to delete{' '}
+                      <span className="font-semibold text-slate-900 dark:text-white">
+                        {circleToDelete.name}
+                      </span>{' '}
+                      ({circleToDelete.course})? This permanently removes the circle, its discussions, messages, and shared materials.
+                    </p>
+                  </div>
+
+                  <div className="flex items-center justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      onClick={() => setCircleToDelete(null)}
+                      disabled={Boolean(deletingCircleId)}
+                      className="px-4 py-2 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      Keep Circle
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDeleteCircle}
+                      disabled={Boolean(deletingCircleId)}
+                      className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-red-600 hover:bg-red-700 text-white text-xs font-semibold transition-colors cursor-pointer disabled:opacity-50"
+                    >
+                      {deletingCircleId ? <Loader2 size={14} className="animate-spin" /> : <Trash2 size={14} />}
+                      <span>{deletingCircleId ? 'Deleting...' : 'Delete Circle'}</span>
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         )}
 
