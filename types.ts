@@ -210,6 +210,22 @@ export interface StudyHubData {
   libraryFiles?: LibraryFile[];
 }
 
+export type StudyHubToolType = 'summary' | 'flashcards' | 'quiz' | 'test' | 'podcast';
+
+export interface StudyHubHistoryItem {
+  id: string;
+  courseId: string;
+  toolType: StudyHubToolType;
+  title: string;
+  createdAt: string;
+  summary?: string;
+  flashcards?: Flashcard[];
+  quizzes?: QuizQuestion[];
+  tests?: QuizQuestion[];
+  transcript?: string;
+  podcastUrl?: string;
+}
+
 export interface GroupMember {
   userId: string;
   name: string;
