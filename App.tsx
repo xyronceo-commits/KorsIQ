@@ -55,7 +55,26 @@ const App: React.FC = () => {
     };
   }, []);
 
-  const [activeTab, setActiveTab] = useState<AppState>('dashboard');
+  const [activeTab, setActiveTab] = useState<AppState>(() => {
+    try {
+      const saved = localStorage.getItem('korsiq_active_tab') as AppState | null;
+      const validTabs: AppState[] = [
+        'overview', 'dashboard', 'planner', 'studio', 'circles', 'groups',
+        'resources', 'settings', 'courses', 'hub', 'schedule', 'timetable',
+        'calculator', 'pomodoro', 'profile', 'analytics', 'library', 'admin'
+      ];
+      if (saved && validTabs.includes(saved)) {
+        return saved;
+      }
+    } catch {}
+    return 'dashboard';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('korsiq_active_tab', activeTab);
+    } catch {}
+  }, [activeTab]);
   const [courses, setCourses] = useState<Course[]>([]);
   const [schedule, setSchedule] = useState<StudySession[]>([]);
   const [profile, setProfile] = useState<UserProfile | null>(null);
@@ -531,6 +550,9 @@ const App: React.FC = () => {
     setHubs({});
     setGroups([]);
     setActiveTab('dashboard');
+    try {
+      localStorage.removeItem('korsiq_active_tab');
+    } catch {}
     setShowAuth(true);
     setAuthMode('signin');
     setSessionExpiredMsg(null);

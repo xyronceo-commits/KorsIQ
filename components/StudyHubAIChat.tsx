@@ -54,7 +54,24 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
   const scopeCourseId = activeCourse?.id || null;
 
   const [conversations, setConversations] = useState<AIConversation[]>([]);
-  const [activeConversationId, setActiveConversationId] = useState<string | null>(null);
+  const convStorageKey = `korsiq_last_ai_conv_${scopeCourseId || 'general'}`;
+  const [activeConversationId, setActiveConversationId] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem(convStorageKey) || null;
+    } catch {
+      return null;
+    }
+  });
+
+  useEffect(() => {
+    try {
+      if (activeConversationId) {
+        localStorage.setItem(convStorageKey, activeConversationId);
+      } else {
+        localStorage.removeItem(convStorageKey);
+      }
+    } catch {}
+  }, [activeConversationId, convStorageKey]);
   const [messages, setMessages] = useState<AIMessage[]>([]);
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
