@@ -3855,6 +3855,7 @@ Output JSON format:
       mode,
       isFullDocumentFirstSection,
       isFullDocumentContinuation,
+      visualPreferences,
       requestId
     } = req.body;
 
@@ -3918,6 +3919,56 @@ Output JSON format:
 
       const studentContext = await getStudentContextForUser(userId);
 
+      // Optional visual design customisation (disabled by default unless user explicitly enables elements)
+      const enabledElements = visualPreferences?.enabledElements || {};
+      const allowedVisualKinds: string[] = [];
+      if (enabledElements.infographics) allowedVisualKinds.push('infographic');
+      if (enabledElements.diagrams) allowedVisualKinds.push('diagram');
+      if (enabledElements.flowcharts) allowedVisualKinds.push('flowchart');
+      if (enabledElements.charts) allowedVisualKinds.push('chart');
+      if (enabledElements.illustrations) allowedVisualKinds.push('illustration');
+      if (enabledElements.icons) allowedVisualKinds.push('icon_callout');
+      if (enabledElements.comparisonTables) allowedVisualKinds.push('comparison_table');
+
+      const shouldGenerateVisuals = !isRewriteMode && allowedVisualKinds.length > 0;
+      const intensity = visualPreferences?.intensity || 'minimal';
+      const designStyle = visualPreferences?.designStyle || 'classic_academic';
+      const maxVisualsForIntensity = intensity === 'visual_rich' ? 3 : intensity === 'balanced' ? 2 : 1;
+
+      const visualInstructionBlock = shouldGenerateVisuals
+        ? `\n\nOPTIONAL VISUAL ELEMENTS ENABLED BY STUDENT:
+Design Style: ${designStyle}
+Visual Intensity: ${intensity} (include up to ${maxVisualsForIntensity} relevant visual block(s) for this section; do not exceed ${maxVisualsForIntensity}).
+Allowed Visual Types ONLY: ${allowedVisualKinds.join(', ')}.
+NEVER generate any visual type not in the Allowed Visual Types list above.
+
+STRICT ACADEMIC VISUAL INTEGRITY RULES:
+1. Every visual must directly correspond to the actual academic content written in this section.
+2. NEVER invent statistics, percentages, or fabricated research data. Only output a "chart" block if real numerical data exists in the provided reference materials or established facts in this section; otherwise do NOT output a "chart" block.
+3. Flowcharts ("flowchart") must accurately represent the actual process or methodology explained in the section.
+4. Diagrams ("diagram") must have clear, accurate labels consistent with the written prose.
+5. After the Markdown prose, append a JSON array of visual blocks wrapped EXACTLY in:
+<!--KORSIQ_VISUALS_START-->
+[
+  {
+    "id": "vis_1",
+    "kind": "infographic" | "diagram" | "flowchart" | "chart" | "illustration" | "icon_callout" | "comparison_table",
+    "title": "Descriptive Academic Figure Title",
+    "caption": "Concise figure caption explaining relevance to the section.",
+    "items": [{ "label": "Label", "detail": "Concise academic explanation", "icon": "book|cpu|layers|check|target|globe|shield|zap" }],
+    "steps": [{ "id": "s1", "label": "Step 1", "detail": "Process step detail" }],
+    "chartType": "bar" | "line",
+    "xLabel": "X Axis",
+    "yLabel": "Y Axis",
+    "dataPoints": [{ "label": "Category", "value": 42, "unit": "%" }],
+    "headers": ["Column A", "Column B"],
+    "rows": [["Row 1A", "Row 1B"]]
+  }
+]
+<!--KORSIQ_VISUALS_END-->
+Include only the fields relevant to each block's "kind" ("items" for infographic/diagram/illustration/icon_callout; "steps" for flowchart; "chartType"+"dataPoints" for chart; "headers"+"rows" for comparison_table).`
+        : '';
+
       const systemInstruction = `${studentContext}
 
 You are KorsIQ Academic Writing Engine, a world-class academic scholar and writer.
@@ -3929,7 +3980,7 @@ CRITICAL INTEGRITY & CITATION RULES:
 3. GROUNDING: If reference materials are provided, actively synthesize their key arguments into the text.
 4. STRUCTURE: Write in cohesive, well-developed paragraphs. Use bold terms and sub-points sparingly and appropriately.
 5. LENGTH: Target approximately ${wordCount} words (±15%).
-6. PRESERVE STUDENT CONTROL: Incorporate the student's personal instructions faithfully.`;
+6. PRESERVE STUDENT CONTROL: Incorporate the student's personal instructions faithfully.${visualInstructionBlock}`;
 
       const prompt = `Write the content for the following section:
 Document Title: "${docTitle || 'Academic Paper'}"
@@ -3947,7 +3998,7 @@ ${instructionModifier ? `OPERATION MODE: ${instructionModifier}\n` : ''}
 REFERENCE MATERIALS:
 ${refList || 'No external references uploaded for this section.'}
 
-Return your response in clean Markdown formatting ready for direct insertion into the academic document.`;
+Return your response in clean Markdown formatting ready for direct insertion into the academic document.${shouldGenerateVisuals ? ' If visual blocks are appropriate, append them at the end inside <!--KORSIQ_VISUALS_START-->...<!--KORSIQ_VISUALS_END-->.' : ''}`;
 
       const aiResponse = await runAICall({
         systemInstruction,
@@ -3956,9 +4007,67 @@ Return your response in clean Markdown formatting ready for direct insertion int
         modelTier: 'heavy'
       });
 
+      let cleanContent = aiResponse || '';
+      let parsedVisuals: any[] = [];
+
+      if (shouldGenerateVisuals && cleanContent) {
+        const visualMatch = cleanContent.match(/<!--KORSIQ_VISUALS_START-->([\s\S]*?)<!--KORSIQ_VISUALS_END-->/);
+        if (visualMatch) {
+          cleanContent = cleanContent.replace(/<!--KORSIQ_VISUALS_START-->[\s\S]*?<!--KORSIQ_VISUALS_END-->/g, '').trim();
+          try {
+            const rawJson = visualMatch[1].replace(/^```json\s*/i, '').replace(/```\s*$/i, '').trim();
+            const arr = JSON.parse(rawJson);
+            if (Array.isArray(arr)) {
+              parsedVisuals = arr
+                .filter((v: any) => v && typeof v === 'object' && allowedVisualKinds.includes(v.kind) && typeof v.title === 'string' && v.title.trim())
+                .slice(0, maxVisualsForIntensity)
+                .map((v: any, idx: number) => ({
+                  id: typeof v.id === 'string' && v.id.trim() ? v.id.trim() : `vis_${Date.now()}_${idx}`,
+                  kind: v.kind,
+                  title: String(v.title).trim(),
+                  caption: typeof v.caption === 'string' ? v.caption.trim() : undefined,
+                  items: Array.isArray(v.items) ? v.items.slice(0, 6).map((it: any) => ({
+                    label: String(it?.label || '').trim(),
+                    detail: typeof it?.detail === 'string' ? it.detail.trim() : undefined,
+                    icon: typeof it?.icon === 'string' ? it.icon.trim() : undefined,
+                  })).filter((it: any) => it.label) : undefined,
+                  steps: Array.isArray(v.steps) ? v.steps.slice(0, 6).map((st: any, sIdx: number) => ({
+                    id: String(st?.id || `s${sIdx + 1}`),
+                    label: String(st?.label || '').trim(),
+                    detail: typeof st?.detail === 'string' ? st.detail.trim() : undefined,
+                  })).filter((st: any) => st.label) : undefined,
+                  chartType: v.chartType === 'line' ? 'line' : v.chartType === 'bar' ? 'bar' : undefined,
+                  xLabel: typeof v.xLabel === 'string' ? v.xLabel.trim() : undefined,
+                  yLabel: typeof v.yLabel === 'string' ? v.yLabel.trim() : undefined,
+                  dataPoints: Array.isArray(v.dataPoints) ? v.dataPoints
+                    .filter((dp: any) => dp && typeof dp.label === 'string' && typeof dp.value === 'number' && Number.isFinite(dp.value))
+                    .slice(0, 8)
+                    .map((dp: any) => ({
+                      label: dp.label.trim(),
+                      value: dp.value,
+                      unit: typeof dp.unit === 'string' ? dp.unit.trim() : undefined,
+                    })) : undefined,
+                  headers: Array.isArray(v.headers) ? v.headers.map((h: any) => String(h || '').trim()).filter(Boolean) : undefined,
+                  rows: Array.isArray(v.rows) ? v.rows.filter((r: any) => Array.isArray(r)).map((r: any[]) => r.map((c: any) => String(c ?? '').trim())) : undefined,
+                }))
+                .filter((v: any) => {
+                  if (v.kind === 'chart') return Array.isArray(v.dataPoints) && v.dataPoints.length >= 2;
+                  if (v.kind === 'flowchart') return Array.isArray(v.steps) && v.steps.length >= 2;
+                  if (v.kind === 'comparison_table') return Array.isArray(v.headers) && v.headers.length >= 2 && Array.isArray(v.rows) && v.rows.length >= 1;
+                  return Array.isArray(v.items) && v.items.length >= 1;
+                });
+            }
+          } catch (parseErr) {
+            console.warn('Failed to parse optional Studio visual JSON:', parseErr);
+            parsedVisuals = [];
+          }
+        }
+      }
+
       return res.json({
-        content: aiResponse || '',
-        wordCount: (aiResponse || '').trim().split(/\s+/).filter(Boolean).length,
+        content: cleanContent,
+        visuals: parsedVisuals,
+        wordCount: cleanContent.trim().split(/\s+/).filter(Boolean).length,
         creditsRemaining: spend.balance
       });
     } catch (error: any) {
@@ -6350,6 +6459,44 @@ Generate a comprehensive exam simulation with 8 questions from the provided text
     }
   });
 
+  // 9b. Admin Dashboard API: Delete a Study Circle
+  app.delete('/api/admin/circles/:circleId', requireAdminAuth, async (req, res) => {
+    if (!supabaseAdmin) return res.status(503).json({ success: false, error: 'Database service unavailable.' });
+    const circleId = req.params.circleId;
+    const admin = (req as any).adminUser;
+
+    try {
+      const { data: existing, error: fetchErr } = await supabaseAdmin
+        .from('study_groups')
+        .select('id, name, course, owner_id')
+        .eq('id', circleId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!existing) {
+        return res.status(404).json({ success: false, error: 'Circle not found.' });
+      }
+
+      const { error: deleteErr } = await supabaseAdmin
+        .from('study_groups')
+        .delete()
+        .eq('id', circleId);
+
+      if (deleteErr) throw deleteErr;
+
+      await logAdminAction(admin.email, 'admin_delete_circle', {
+        circleId,
+        name: existing.name,
+        course: existing.course,
+        ownerId: existing.owner_id,
+      });
+
+      res.json({ success: true, message: `Circle "${existing.name}" deleted.` });
+    } catch (err: any) {
+      res.status(500).json({ success: false, error: err?.message || 'Failed to delete circle.' });
+    }
+  });
+
   // 10. Admin Dashboard API: Audit log
   app.get('/api/admin/audit-log', requireAdminAuth, async (_req, res) => {
     if (!supabaseAdmin) return res.status(503).json({ success: false, error: 'Database service unavailable.' });
@@ -6783,6 +6930,132 @@ Generate a comprehensive exam simulation with 8 questions from the provided text
     } catch (err: any) {
       console.error('[circles/join]', err?.message || err);
       res.status(500).json({ success: false, error: 'Failed to join circle.' });
+    }
+  });
+
+  // Update Study Circle information (Owner only)
+  app.patch('/api/circles/:circleId', requireAuth, circleWriteLimiter, async (req: AuthenticatedRequest, res) => {
+    if (!supabaseAdmin) {
+      return res.status(503).json({ success: false, error: 'Circle updates are temporarily unavailable.' });
+    }
+    try {
+      const circleId = String(req.params.circleId || '').trim();
+      const uid = req.user!.uid;
+      if (!circleId) {
+        return res.status(400).json({ success: false, error: 'Circle ID is required.' });
+      }
+
+      const { data: existing, error: fetchErr } = await supabaseAdmin
+        .from('study_groups')
+        .select('*')
+        .eq('id', circleId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!existing) {
+        return res.status(404).json({ success: false, error: 'Circle not found.' });
+      }
+      if (existing.owner_id !== uid) {
+        return res.status(403).json({ success: false, error: 'Only the circle owner can edit group information.' });
+      }
+
+      const { name, course, description, type, department, level, university, academicSession } = req.body || {};
+      const nextName = typeof name === 'string' ? name.trim() : existing.name;
+      const nextCourse = typeof course === 'string' ? course.trim() : existing.course;
+      const nextDescription = typeof description === 'string' ? description.trim() : (existing.description || '');
+
+      if (!nextName || !nextCourse) {
+        return res.status(400).json({ success: false, error: 'Circle name and course code are required.' });
+      }
+
+      const nextType: 'general' | 'private' =
+        type === 'general' || type === 'private' ? type : (existing.type === 'general' ? 'general' : 'private');
+
+      if (nextType === 'private' && existing.type !== 'private') {
+        const tier = await getUserPlanTier(uid);
+        if (!can('privateCircles', tier)) {
+          return res.status(403).json({
+            success: false,
+            error: `Private circles with invite codes require ${getPlanConfig('plus').displayName} or ${getPlanConfig('studio').displayName}.`,
+          });
+        }
+      }
+
+      const updates: Record<string, any> = {
+        name: nextName,
+        course: nextCourse,
+        description: nextDescription,
+        type: nextType,
+        visibility: nextType === 'general' ? 'public' : 'private',
+        updated_at: new Date().toISOString(),
+      };
+
+      if (typeof department === 'string') updates.department = department.trim();
+      if (typeof level === 'string') updates.level = level.trim();
+      if (typeof university === 'string') updates.university = university.trim();
+      if (typeof academicSession === 'string') updates.academic_session = academicSession.trim();
+
+      const { data: updated, error: updateErr } = await supabaseAdmin
+        .from('study_groups')
+        .update(updates)
+        .eq('id', circleId)
+        .eq('owner_id', uid)
+        .select('*')
+        .maybeSingle();
+
+      if (updateErr) throw updateErr;
+      if (!updated) {
+        return res.status(404).json({ success: false, error: 'Circle not found.' });
+      }
+
+      res.json({
+        success: true,
+        group: circleView(updated, { full: true }),
+      });
+    } catch (err: any) {
+      console.error('[circles/update]', err?.message || err);
+      res.status(500).json({ success: false, error: err?.message || 'Failed to update circle.' });
+    }
+  });
+
+  // Delete a Study Circle (Owner only)
+  app.delete('/api/circles/:circleId', requireAuth, circleWriteLimiter, async (req: AuthenticatedRequest, res) => {
+    if (!supabaseAdmin) {
+      return res.status(503).json({ success: false, error: 'Circle deletion is temporarily unavailable.' });
+    }
+    try {
+      const circleId = String(req.params.circleId || '').trim();
+      const uid = req.user!.uid;
+      if (!circleId) {
+        return res.status(400).json({ success: false, error: 'Circle ID is required.' });
+      }
+
+      const { data: existing, error: fetchErr } = await supabaseAdmin
+        .from('study_groups')
+        .select('id, name, owner_id')
+        .eq('id', circleId)
+        .maybeSingle();
+
+      if (fetchErr) throw fetchErr;
+      if (!existing) {
+        return res.status(404).json({ success: false, error: 'Circle not found.' });
+      }
+      if (existing.owner_id !== uid) {
+        return res.status(403).json({ success: false, error: 'Only the circle owner can delete this circle.' });
+      }
+
+      const { error: deleteErr } = await supabaseAdmin
+        .from('study_groups')
+        .delete()
+        .eq('id', circleId)
+        .eq('owner_id', uid);
+
+      if (deleteErr) throw deleteErr;
+
+      res.json({ success: true, message: `Circle "${existing.name}" deleted.` });
+    } catch (err: any) {
+      console.error('[circles/delete]', err?.message || err);
+      res.status(500).json({ success: false, error: err?.message || 'Failed to delete circle.' });
     }
   });
 

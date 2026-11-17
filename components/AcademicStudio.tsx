@@ -51,6 +51,8 @@ import {
   StudioReference,
   StudioReviewSuggestion,
   StudioVersion,
+  StudioVisualBlock,
+  StudioVisualPreferences,
   UserProfile,
   hasStudioPrivileges,
   hasFullStudioPrivileges
@@ -60,9 +62,12 @@ import { GeminiService } from '../services/gemini';
 import { generateDocxBlob, downloadDocx } from '../utils/docxExport';
 import { downloadPdf } from '../utils/pdfExport';
 import { downloadPptx } from '../utils/pptxExport';
+import { DEFAULT_VISUAL_PREFERENCES, hasAnyVisualElementEnabled } from '../utils/visualRenderer';
 import { BILLING_ENABLED, can, getPlanDisplayName } from '../lib/plans';
 import KorsIQLogo from './KorsIQLogo';
 import SubscriptionCheckoutModal from './SubscriptionCheckoutModal';
+import StudioVisualDesignPanel from './StudioVisualDesignPanel';
+import StudioVisualCard from './StudioVisualCard';
 
 interface AcademicStudioProps {
   userId: string;
@@ -121,7 +126,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
 
   // Creation Wizard State
   const [isCreatingDoc, setIsCreatingDoc] = useState(false);
-  const [wizardStep, setWizardStep] = useState<1 | 2 | 3>(1);
+  const [wizardStep, setWizardStep] = useState<1 | 2 | 3 | 4>(1);
   const [newDocTitle, setNewDocTitle] = useState('');
   const [newDocType, setNewDocType] = useState<AcademicDocumentType>('assignment');
   const [newDocSubject, setNewDocSubject] = useState('');
@@ -129,6 +134,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   const [newDocCitation, setNewDocCitation] = useState<CitationStyle>('APA');
   const [newDocFormat, setNewDocFormat] = useState<'docx' | 'pdf' | 'pptx' | 'other'>('docx');
   const [newDocOtherFormat, setNewDocOtherFormat] = useState('');
+  const [newDocVisualPrefs, setNewDocVisualPrefs] = useState<StudioVisualPreferences>(DEFAULT_VISUAL_PREFERENCES);
+  const [showVisualPrefsModal, setShowVisualPrefsModal] = useState(false);
   const [newDocInstructions, setNewDocInstructions] = useState('');
   const [newDocDepartment, setNewDocDepartment] = useState(profile.department || '');
   const [newDocInstitution, setNewDocInstitution] = useState(profile.university || '');
@@ -262,8 +269,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     await DBService.saveAcademicDocument(updated);
   };
 
-  // Helper: Auto-save current editor text to active section
-  const handleEditorChange = (newText: string) => {
+  // Helper: Auto-save current editor text (and optional visuals) to active section
+  const handleEditorChange = (newText: string, nextVisuals?: StudioVisualBlock[]) => {
     setEditorText(newText);
     if (!activeDocument || !activeSectionId) return;
 
@@ -273,6 +280,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
         ? {
             ...s,
             content: newText,
+            ...(nextVisuals !== undefined ? { visuals: nextVisuals } : {}),
             wordCount: words,
             status: (words > 0 ? (s.status === 'empty' ? 'drafted' : s.status) : 'empty') as 'empty' | 'generating' | 'drafted' | 'approved',
             lastEditedAt: new Date().toISOString(),
@@ -291,6 +299,17 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     persistDocument(updatedDoc);
   };
 
+  const handleRemoveSectionVisual = (sectionId: string, visualId: string) => {
+    if (!activeDocument) return;
+    const updatedSections = activeDocument.sections.map((s) =>
+      s.id === sectionId
+        ? { ...s, visuals: (s.visuals || []).filter((v) => v.id !== visualId) }
+        : s
+    );
+    persistDocument({ ...activeDocument, sections: updatedSections });
+    showToast('Visual element removed from section.');
+  };
+
   // =========================================================
   // CREATION & OUTLINE PLANNING
   // =========================================================
@@ -307,6 +326,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     setNewDocCitation('APA');
     setNewDocFormat('docx');
     setNewDocOtherFormat('');
+    setNewDocVisualPrefs(DEFAULT_VISUAL_PREFERENCES);
     setNewDocInstructions('');
     setNewDocReferences([]);
     setWizardStep(1);
@@ -393,6 +413,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           includeReferences: true,
           preferredFormat: newDocFormat,
           otherFormatLabel: newDocFormat === 'other' ? newDocOtherFormat.trim() || 'Other' : undefined,
+          visualPreferences: newDocVisualPrefs,
         },
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -558,9 +579,10 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
         references: activeDocument.references,
         existingContent: sec.content,
         mode,
+        visualPreferences: activeDocument.metadata?.visualPreferences,
       });
 
-      handleEditorChange(result.content);
+      handleEditorChange(result.content, mode === 'generate' || mode === 'regenerate' ? (result.visuals || []) : undefined);
       showToast(`Section "${sec.title}" generated successfully!`);
     } catch (err: any) {
       console.error('Section generation failed:', err);
@@ -611,12 +633,20 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           mode: 'generate',
           isFullDocumentFirstSection: i === 0,
           isFullDocumentContinuation: i > 0,
+          visualPreferences: activeDocument.metadata?.visualPreferences,
         });
 
         const words = result.content.trim().split(/\s+/).filter(Boolean).length;
         updatedSections = updatedSections.map((s) =>
           s.id === sec.id
-            ? { ...s, content: result.content, wordCount: words, status: 'drafted', lastEditedAt: new Date().toISOString() }
+            ? {
+                ...s,
+                content: result.content,
+                visuals: result.visuals || [],
+                wordCount: words,
+                status: 'drafted',
+                lastEditedAt: new Date().toISOString(),
+              }
             : s
         );
 
@@ -1264,9 +1294,18 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
               <ArrowLeft size={16} />
               <span>Back to Documents</span>
             </button>
-            <span className="text-xs font-semibold text-rose-600 bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-900 px-3 py-1 rounded-md">
-              Outline Approval Required
-            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowVisualPrefsModal(true)}
+                className="px-3 py-1.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 rounded-md text-xs font-semibold cursor-pointer"
+              >
+                Design &amp; Visuals{hasAnyVisualElementEnabled(activeDocument.metadata?.visualPreferences) ? ' (On)' : ''}
+              </button>
+              <span className="text-xs font-semibold text-rose-600 bg-rose-50 dark:bg-rose-950/60 border border-rose-200 dark:border-rose-900 px-3 py-1 rounded-md">
+                Outline Approval Required
+              </span>
+            </div>
           </div>
 
           {/* Outline Inspection Card */}
@@ -1468,6 +1507,16 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                 </button>
               </div>
 
+              {/* Visual Design Customisation Shortcut */}
+              <button
+                type="button"
+                onClick={() => setShowVisualPrefsModal(true)}
+                className="px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-[#111827] dark:text-white rounded-lg text-xs font-semibold cursor-pointer min-h-[44px]"
+                title="Customize Optional Visual Design"
+              >
+                Design{hasAnyVisualElementEnabled(activeDocument.metadata?.visualPreferences) ? ' • Visuals On' : ''}
+              </button>
+
               {/* Primary Action Button: Export (Gated with Quiet Upgrade Prompt where excluded) */}
               <button
                 onClick={() => {
@@ -1657,6 +1706,27 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                   </span>
                   <span>Autosaved</span>
                 </div>
+
+                {/* Section Visual Elements (only rendered when generated/enabled) */}
+                {(() => {
+                  const curSec = activeDocument.sections.find((s) => s.id === activeSectionId);
+                  if (!curSec?.visuals || curSec.visuals.length === 0) return null;
+                  return (
+                    <div className="pt-3 border-t border-[#E5E7EB] dark:border-slate-800 space-y-2">
+                      <p className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider">
+                        Optional Visual Elements ({curSec.visuals.length})
+                      </p>
+                      {curSec.visuals.map((vis) => (
+                        <StudioVisualCard
+                          key={vis.id}
+                          block={vis}
+                          designStyle={activeDocument.metadata?.visualPreferences?.designStyle}
+                          onRemove={() => handleRemoveSectionVisual(curSec.id, vis.id)}
+                        />
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             </div>
 
@@ -2012,10 +2082,16 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
               <div>
                 <span className="text-[10px] font-semibold text-blue-600 dark:text-blue-400 uppercase tracking-wider">
-                  Step {wizardStep} of 3
+                  Step {wizardStep} of 4
                 </span>
                 <h3 className="font-semibold text-lg text-slate-900 dark:text-white">
-                  {wizardStep === 1 ? 'Manuscript Parameters' : wizardStep === 2 ? 'Assignment Prompt & Instructions' : 'Reference Materials & Sources'}
+                  {wizardStep === 1
+                    ? 'Manuscript Parameters'
+                    : wizardStep === 2
+                    ? 'Visual Design Customisation (Optional)'
+                    : wizardStep === 3
+                    ? 'Assignment Prompt & Instructions'
+                    : 'Reference Materials & Sources'}
                 </h3>
               </div>
               <button
@@ -2164,6 +2240,35 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     }}
                     className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
                   >
+                    <span>Next: Visual Design (Optional)</span>
+                    <ArrowRight size={14} />
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* STEP 2: Optional Visual Design Customisation */}
+            {wizardStep === 2 && (
+              <div className="space-y-4">
+                <StudioVisualDesignPanel
+                  value={newDocVisualPrefs}
+                  onChange={setNewDocVisualPrefs}
+                  onSkip={() => setWizardStep(3)}
+                />
+
+                <div className="flex justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(1)}
+                    className="px-3 py-1.5 text-slate-500 hover:text-slate-800 text-xs font-semibold cursor-pointer"
+                  >
+                    Back
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setWizardStep(3)}
+                    className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
+                  >
                     <span>Next: Assignment Guidelines</span>
                     <ArrowRight size={14} />
                   </button>
@@ -2171,8 +2276,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
               </div>
             )}
 
-            {/* STEP 2: Assignment Instructions & Cover Details */}
-            {wizardStep === 2 && (
+            {/* STEP 3: Assignment Instructions & Cover Details */}
+            {wizardStep === 3 && (
               <div className="space-y-4">
                 <div className="space-y-1.5">
                   <label className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">
@@ -2221,14 +2326,14 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                 <div className="flex justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
                   <button
                     type="button"
-                    onClick={() => setWizardStep(1)}
+                    onClick={() => setWizardStep(3)}
                     className="px-3 py-1.5 text-slate-500 hover:text-slate-800 text-xs font-semibold cursor-pointer"
                   >
                     Back
                   </button>
                   <button
                     type="button"
-                    onClick={() => setWizardStep(3)}
+                    onClick={() => setWizardStep(4)}
                     className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-xs"
                   >
                     <span>Next: References</span>
@@ -2238,8 +2343,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
               </div>
             )}
 
-            {/* STEP 3: Reference Intelligence */}
-            {wizardStep === 3 && (
+            {/* STEP 4: Reference Intelligence */}
+            {wizardStep === 4 && (
               <div className="space-y-4">
                 <div className="p-3.5 bg-slate-50 dark:bg-slate-800/60 rounded-lg border border-slate-200 dark:border-slate-700 space-y-1.5">
                   <div className="flex items-center justify-between">
@@ -2262,7 +2367,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                 <div className="flex justify-between pt-3 border-t border-slate-100 dark:border-slate-800">
                   <button
                     type="button"
-                    onClick={() => setWizardStep(2)}
+                    onClick={() => setWizardStep(3)}
                     className="px-3 py-1.5 text-slate-500 hover:text-slate-800 text-xs font-semibold cursor-pointer"
                   >
                     Back
@@ -2451,13 +2556,31 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                 <span>{isExportingPptx ? 'Exporting...' : 'PowerPoint (.pptx)'}</span>
               </button>
 
-              <div className="text-xs text-slate-500 ml-auto font-medium">
-                {activeDocument.currentWordCount.toLocaleString()} words • {activeDocument.citationStyle}
+              <div className="text-xs text-slate-500 ml-auto font-medium flex items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowExportModal(false);
+                    setShowVisualPrefsModal(true);
+                  }}
+                  className="text-blue-600 hover:underline font-semibold cursor-pointer"
+                >
+                  Change Design &amp; Visuals
+                </button>
+                <span>
+                  {activeDocument.currentWordCount.toLocaleString()} words • {activeDocument.citationStyle}
+                </span>
               </div>
             </div>
 
             {/* Live Visual Academic Preview */}
-            <div className="p-8 sm:p-10 bg-white text-slate-900 border border-slate-200 rounded-lg shadow-inner font-sans text-sm space-y-6 max-h-[480px] overflow-y-auto custom-scrollbar">
+            <div
+              className={`p-8 sm:p-10 bg-white text-slate-900 border border-slate-200 rounded-lg shadow-inner text-sm space-y-6 max-h-[480px] overflow-y-auto custom-scrollbar ${
+                (activeDocument.metadata?.visualPreferences?.designStyle || 'classic_academic') === 'classic_academic'
+                  ? 'font-serif'
+                  : 'font-sans'
+              }`}
+            >
               {/* Cover Page */}
               <div className="text-center space-y-4 pb-8 border-b border-dashed border-slate-300">
                 <p className="text-xs font-bold uppercase tracking-wider text-slate-700">
@@ -2492,13 +2615,30 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
               {/* Sections & Body Content */}
               <div className="space-y-6">
                 {activeDocument.sections.map((sec, idx) => (
-                  <div key={sec.id} className="space-y-2">
-                    <h2 className="text-base font-bold uppercase tracking-wide border-b border-slate-100 pb-1">
+                  <div key={sec.id} className="space-y-3">
+                    <h2
+                      className={`text-base font-bold uppercase tracking-wide pb-1 ${
+                        (activeDocument.metadata?.visualPreferences?.designStyle || 'classic_academic') === 'classic_academic'
+                          ? 'border-b border-slate-200 text-slate-900'
+                          : 'border-b-2 border-blue-600 text-blue-950'
+                      }`}
+                    >
                       {sec.level === 1 ? `CHAPTER ${idx + 1}: ` : ''}{sec.title}
                     </h2>
-                    <div className="text-xs leading-relaxed text-slate-800 whitespace-pre-wrap font-sans indent-6">
+                    <div className="text-xs leading-relaxed text-slate-800 whitespace-pre-wrap indent-6">
                       {sec.content || '[Section under active development]'}
                     </div>
+                    {Array.isArray(sec.visuals) && sec.visuals.length > 0 && (
+                      <div className="space-y-3 pt-1">
+                        {sec.visuals.map((vis) => (
+                          <StudioVisualCard
+                            key={vis.id}
+                            block={vis}
+                            designStyle={activeDocument.metadata?.visualPreferences?.designStyle}
+                          />
+                        ))}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -2618,6 +2758,57 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                 className="w-full py-2 text-[#5B6472] hover:text-[#111827] text-xs font-medium cursor-pointer min-h-[44px]"
               >
                 Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: Visual Design Customisation for Existing Document */}
+      {showVisualPrefsModal && activeDocument && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl max-w-2xl w-full p-6 space-y-5 shadow-xl max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <div>
+                <span className="text-[10px] font-semibold text-blue-600 uppercase tracking-wider">
+                  Optional Visual Design
+                </span>
+                <h3 className="font-semibold text-base text-slate-900 dark:text-white">
+                  Customize Document Design &amp; Visuals
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowVisualPrefsModal(false)}
+                className="p-1.5 text-slate-400 hover:text-slate-600 rounded-md cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <StudioVisualDesignPanel
+              value={activeDocument.metadata?.visualPreferences || DEFAULT_VISUAL_PREFERENCES}
+              onChange={(nextPrefs) => {
+                persistDocument({
+                  ...activeDocument,
+                  metadata: {
+                    ...activeDocument.metadata,
+                    visualPreferences: nextPrefs,
+                  },
+                });
+              }}
+            />
+
+            <div className="flex justify-end pt-3 border-t border-slate-100 dark:border-slate-800">
+              <button
+                type="button"
+                onClick={() => {
+                  setShowVisualPrefsModal(false);
+                  showToast('Visual design preferences saved. Newly generated or regenerated sections will use these settings.');
+                }}
+                className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-xs font-semibold cursor-pointer min-h-[40px]"
+              >
+                Done
               </button>
             </div>
           </div>

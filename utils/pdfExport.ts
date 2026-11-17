@@ -1,5 +1,6 @@
 import { jsPDF } from 'jspdf';
 import { AcademicDocument } from '../types';
+import { renderVisualBlockToPng } from './visualRenderer';
 
 function stripInlineMarkdown(text: string): string {
   return text
@@ -33,6 +34,10 @@ export function generatePdfDoc(doc: AcademicDocument): jsPDF {
     format: 'a4',
   });
 
+  const designStyle = doc.metadata?.visualPreferences?.designStyle || 'classic_academic';
+  const isClassic = designStyle === 'classic_academic';
+  const pdfFont = isClassic ? 'times' : 'helvetica';
+
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
   const margin = 20;
@@ -54,7 +59,7 @@ export function generatePdfDoc(doc: AcademicDocument): jsPDF {
     lineHeightMm = fontSize * 0.45,
     extraBottomMm = 2
   ) => {
-    pdf.setFont('helvetica', style);
+    pdf.setFont(pdfFont, style);
     pdf.setFontSize(fontSize);
     const lines = pdf.splitTextToSize(text, maxLineWidth) as string[];
     for (const line of lines) {
@@ -201,6 +206,92 @@ export function generatePdfDoc(doc: AcademicDocument): jsPDF {
 
       writeWrappedText(stripInlineMarkdown(line), 10.5, 'normal', 5, 2.5);
       i += 1;
+    }
+
+    // Optional visual elements for this section (only when generated/enabled)
+    if (Array.isArray(section.visuals) && section.visuals.length > 0) {
+      for (const vis of section.visuals) {
+        if (vis.kind === 'comparison_table' && vis.headers && vis.rows && vis.rows.length > 0) {
+          ensureSpace(18);
+          pdf.setTextColor(isClassic ? 17 : 30, isClassic ? 24 : 58, isClassic ? 39 : 138);
+          writeWrappedText(vis.title, 10.5, 'bold', 5, 2);
+          pdf.setTextColor(0, 0, 0);
+
+          const colCount = Math.max(1, vis.headers.length);
+          const colWidth = maxLineWidth / colCount;
+          const allRows = [vis.headers, ...vis.rows];
+          for (let rIdx = 0; rIdx < allRows.length; rIdx += 1) {
+            const row = allRows[rIdx];
+            const wrappedCells = row.map((cell) =>
+              pdf.splitTextToSize(String(cell ?? ''), Math.max(15, colWidth - 3)) as string[]
+            );
+            const rowLines = Math.max(...wrappedCells.map((c) => c.length), 1);
+            const rowHeight = rowLines * 4.5 + 3.5;
+            ensureSpace(rowHeight);
+
+            if (rIdx === 0) {
+              pdf.setFillColor(37, 99, 235);
+              pdf.rect(margin, y - 3.5, maxLineWidth, rowHeight, 'F');
+              pdf.setTextColor(255, 255, 255);
+              pdf.setFont(pdfFont, 'bold');
+            } else {
+              if (rIdx % 2 === 0) {
+                pdf.setFillColor(248, 250, 252);
+                pdf.rect(margin, y - 3.5, maxLineWidth, rowHeight, 'F');
+              }
+              pdf.setTextColor(15, 23, 42);
+              pdf.setFont(pdfFont, 'normal');
+            }
+            pdf.setFontSize(9.5);
+            for (let cIdx = 0; cIdx < colCount; cIdx += 1) {
+              const x = margin + cIdx * colWidth;
+              pdf.setDrawColor(203, 213, 225);
+              pdf.rect(x, y - 3.5, colWidth, rowHeight);
+              const cellLines = wrappedCells[cIdx] || [''];
+              cellLines.forEach((cl, lineOffset) => {
+                pdf.text(cl, x + 1.5, y + lineOffset * 4.5);
+              });
+            }
+            y += rowHeight;
+          }
+          pdf.setTextColor(0, 0, 0);
+          pdf.setDrawColor(0, 0, 0);
+          if (vis.caption) {
+            y += 1.5;
+            pdf.setTextColor(71, 85, 105);
+            writeWrappedText(vis.caption, 9, 'italic', 4.2, 3);
+            pdf.setTextColor(0, 0, 0);
+          } else {
+            y += 3;
+          }
+          continue;
+        }
+
+        const rendered = renderVisualBlockToPng(vis, designStyle);
+        if (!rendered) continue;
+
+        const maxPrintableH = bottomLimit - margin - 14;
+        let drawW = maxLineWidth;
+        let drawH = drawW * (rendered.height / rendered.width);
+        if (drawH > maxPrintableH) {
+          const ratio = maxPrintableH / drawH;
+          drawH = maxPrintableH;
+          drawW = drawW * ratio;
+        }
+
+        ensureSpace(drawH + 10);
+        const drawX = margin + (maxLineWidth - drawW) / 2;
+        pdf.addImage(rendered.dataUrl, 'PNG', drawX, y, drawW, drawH);
+        y += drawH + 3;
+
+        if (vis.caption) {
+          pdf.setTextColor(71, 85, 105);
+          writeWrappedText(vis.caption, 9, 'italic', 4.2, 3);
+          pdf.setTextColor(0, 0, 0);
+        } else {
+          y += 2;
+        }
+      }
     }
 
     y += 4;

@@ -534,8 +534,9 @@ export const GeminiService = {
     mode?: string;
     isFullDocumentFirstSection?: boolean;
     isFullDocumentContinuation?: boolean;
+    visualPreferences?: any;
     requestId?: string;
-  }): Promise<{ content: string; wordCount: number; creditsRemaining?: number }> {
+  }): Promise<{ content: string; visuals?: any[]; wordCount: number; creditsRemaining?: number }> {
     return await safeFetchJson('/api/ai/studio/generate-section', {
       method: 'POST',
       headers: await getHeaders(),
