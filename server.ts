@@ -4,6 +4,19 @@ import path from 'path';
 import crypto from 'crypto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
 import { isAiSender } from './lib/brand';
+import {
+  buildGenerateConfigForAttempt,
+  buildModelChain,
+  HeavyModelGuard,
+  HeavyThinkingLevel,
+  isIncompleteHeavyResponse,
+  isPermanentModelError,
+  lowerThinkingLevel,
+  ModelTier,
+  resolveHeavyModel,
+  resolveHeavyThinkingLevel,
+  resolveHeavyTimeoutMs,
+} from './lib/aiModels';
 import { GoogleGenAI } from '@google/genai';
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
@@ -162,10 +175,11 @@ function safeCompareStrings(a: string, b: string): boolean {
 
 // Gemini models are env-configurable because Google retires them. Override GEMINI_MODEL in hosting env
 // instead of editing code. Later entries are fallbacks tried in order.
-// Standard tools (summaries, flashcards, quizzes, tests, chat, etc.) use Gemini 3.5 Flash;
-// Academic Studio and AI Podcast use Gemini 3.6 Flash.
-const GEMINI_STANDARD_MODEL = cleanEnvKey('GEMINI_STANDARD_MODEL') || cleanEnvKey('GEMINI_MODEL') || 'gemini-3.5-flash';
-const GEMINI_STUDIO_MODEL = cleanEnvKey('GEMINI_STUDIO_MODEL') || cleanEnvKey('GEMINI_MODEL') || 'gemini-3.6-flash';
+// Everyday features use the fast tier; Academic Studio and semester outline analysis use the heavy tier
+// with automatic fallback to fast models.
+const GEMINI_FAST_PRIMARY = cleanEnvKey('GEMINI_MODEL') || cleanEnvKey('GEMINI_STANDARD_MODEL') || 'gemini-3.5-flash';
+const GEMINI_HEAVY_MODEL = resolveHeavyModel(process.env);
+const GEMINI_HEAVY_TIMEOUT_MS = resolveHeavyTimeoutMs(process.env);
 const GEMINI_FALLBACK_MODELS = [
   cleanEnvKey('GEMINI_FALLBACK_MODEL'),
   'gemini-3.5-flash',
@@ -174,7 +188,7 @@ const GEMINI_FALLBACK_MODELS = [
   'gemini-3.8-flash',
   'gemini-2.5-flash'
 ].filter(Boolean) as string[];
-const OCR_MODEL = GEMINI_STANDARD_MODEL;
+const heavyModelGuard = new HeavyModelGuard();
 const OCR_INLINE_MAX_BYTES = 15 * 1024 * 1024;
 const OCR_MAX_PDF_BYTES = 25 * 1024 * 1024;
 
@@ -196,7 +210,11 @@ async function ocrMediaWithGemini(buffer: Buffer, mimeType: string, apiKey: stri
     return '';
   }
   const ai = new GoogleGenAI({ apiKey, httpOptions: { headers: { 'User-Agent': 'aistudio-build' } } });
-  const candidateModels = Array.from(new Set([OCR_MODEL, ...GEMINI_FALLBACK_MODELS]));
+  const candidateModels = buildModelChain(
+    'fast',
+    { fastPrimary: GEMINI_FAST_PRIMARY, fallbacks: GEMINI_FALLBACK_MODELS, heavyModel: GEMINI_HEAVY_MODEL },
+    false
+  );
   const promptText =
     'Transcribe all text in this academic document, notes, slides, or transcript exactly as written, in reading order, page by page. ' +
     'Include course codes, course titles, headings, body text, credit units, scores, grades, bullet points, and handwritten text. Do not summarize, translate, or add commentary. ' +
@@ -225,7 +243,10 @@ async function ocrMediaWithGemini(buffer: Buffer, mimeType: string, apiKey: stri
           config: { temperature: 0 }
         });
         const text = normalizeExtractedText(response.text || '');
-        if (text) return text;
+        if (text) {
+          console.log(`[AI] tier=fast model=${model}`);
+          return text;
+        }
       } catch (err: any) {
         console.warn(`[OCR] Gemini OCR model ${model} failed (${err?.status || 'ERR'}):`, err?.message || err);
       }
@@ -632,12 +653,25 @@ export async function createExpressApp() {
     systemInstruction?: string;
     messages: { role: string; content: string }[];
     temperature?: number;
+    topP?: number;
+    topK?: number;
+    maxOutputTokens?: number;
     jsonMode?: boolean;
-    preferGroq?: boolean;
-    tier?: 'standard' | 'studio';
+    modelTier?: ModelTier;
+    thinkingLevel?: HeavyThinkingLevel;
   }
 
-  const runAICall = async ({ systemInstruction, messages, temperature, jsonMode, tier = 'standard' }: AIParams): Promise<string> => {
+  const runAICall = async ({
+    systemInstruction,
+    messages,
+    temperature,
+    topP,
+    topK,
+    maxOutputTokens,
+    jsonMode,
+    modelTier = 'fast',
+    thinkingLevel,
+  }: AIParams): Promise<string> => {
     const geminiKey = pickGeminiKey();
 
     if (!geminiKey) {
@@ -664,29 +698,118 @@ export async function createExpressApp() {
       };
     });
 
-    const config: any = {};
+    const baseConfig: Record<string, any> = {};
     if (systemInstruction) {
-      config.systemInstruction = systemInstruction;
+      baseConfig.systemInstruction = systemInstruction;
     }
     if (temperature !== undefined) {
-      config.temperature = temperature;
+      baseConfig.temperature = temperature;
+    }
+    if (topP !== undefined) {
+      baseConfig.topP = topP;
+    }
+    if (topK !== undefined) {
+      baseConfig.topK = topK;
+    }
+    if (maxOutputTokens !== undefined) {
+      baseConfig.maxOutputTokens = maxOutputTokens;
     }
     if (jsonMode) {
-      config.responseMimeType = "application/json";
+      baseConfig.responseMimeType = "application/json";
     }
 
-    const primaryModel = tier === 'studio' ? GEMINI_STUDIO_MODEL : GEMINI_STANDARD_MODEL;
-    const geminiCandidateModels = Array.from(new Set([primaryModel, ...GEMINI_FALLBACK_MODELS]));
+    const geminiCandidateModels = buildModelChain(
+      modelTier,
+      {
+        fastPrimary: GEMINI_FAST_PRIMARY,
+        fallbacks: GEMINI_FALLBACK_MODELS,
+        heavyModel: GEMINI_HEAVY_MODEL,
+      },
+      heavyModelGuard.isAvailable()
+    );
     let lastError: any = null;
 
     for (const model of geminiCandidateModels) {
+      const isHeavyAttempt = modelTier === 'heavy' && Boolean(GEMINI_HEAVY_MODEL) && model === GEMINI_HEAVY_MODEL;
+
+      if (isHeavyAttempt) {
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => {
+          controller.abort(new Error(`Heavy model timed out after ${GEMINI_HEAVY_TIMEOUT_MS}ms`));
+        }, GEMINI_HEAVY_TIMEOUT_MS);
+        let currentThinking = resolveHeavyThinkingLevel(process.env, thinkingLevel);
+
+        try {
+          let response = await aiGen.models.generateContent({
+            model,
+            contents,
+            config: buildGenerateConfigForAttempt(baseConfig, {
+              isHeavyAttempt: true,
+              thinkingLevel: currentThinking,
+              abortSignal: controller.signal,
+            }) as any,
+          });
+
+          let finishReason = response.candidates?.[0]?.finishReason;
+          if (isIncompleteHeavyResponse(response.text, finishReason)) {
+            const lowerLevel = lowerThinkingLevel(currentThinking);
+            if (lowerLevel && !controller.signal.aborted) {
+              currentThinking = lowerLevel;
+              response = await aiGen.models.generateContent({
+                model,
+                contents,
+                config: buildGenerateConfigForAttempt(baseConfig, {
+                  isHeavyAttempt: true,
+                  thinkingLevel: currentThinking,
+                  abortSignal: controller.signal,
+                }) as any,
+              });
+            }
+          }
+
+          if (response.text && response.text.trim().length > 0) {
+            const usage = response.usageMetadata;
+            const inputTokens = usage?.promptTokenCount ?? 0;
+            const outputTokens =
+              usage?.totalTokenCount != null && usage?.promptTokenCount != null
+                ? Math.max(0, usage.totalTokenCount - usage.promptTokenCount)
+                : (usage?.candidatesTokenCount ?? 0) + (usage?.thoughtsTokenCount ?? 0);
+            console.log(
+              `[AI] tier=heavy model=${model} thinking=${currentThinking} inputTokens=${inputTokens} outputTokens=${outputTokens}`
+            );
+            return response.text;
+          }
+          console.warn(`[AI] Heavy model '${model}' returned empty response; falling back to fast.`);
+        } catch (gErr: any) {
+          if (isPermanentModelError(gErr)) {
+            heavyModelGuard.trip();
+            console.warn(
+              `[AI] Heavy model '${model}' failed permanently (${gErr?.status || 'ERR'}); disabled for 10 minutes.`
+            );
+          } else {
+            console.warn(
+              `[AI] Heavy model '${model}' call warning (${gErr?.status || gErr?.name || 'ERR'}):`,
+              gErr?.message || gErr
+            );
+          }
+          lastError = gErr;
+        } finally {
+          clearTimeout(timeoutId);
+        }
+        continue;
+      }
+
       try {
         const response = await aiGen.models.generateContent({
           model,
           contents,
-          config
+          config: buildGenerateConfigForAttempt(baseConfig, {
+            isHeavyAttempt: false,
+            thinkingLevel: 'low',
+          }) as any,
         });
         if (response.text && response.text.trim().length > 0) {
+          console.log(`[AI] tier=fast model=${model}`);
           return response.text;
         }
       } catch (gErr: any) {
@@ -2703,7 +2826,7 @@ Dr. Taylor: [spoken text]`;
       systemInstruction,
       messages: [{ role: 'user', content: `Study Material / Revision Content: "${studyMaterial?.slice(0, 8000) || 'General Academic Revision'}"` }],
       temperature: 0.4,
-      tier: 'studio'
+      modelTier: 'fast'
     });
   }
 
@@ -3327,7 +3450,9 @@ Example:
       const aiContent = await runAICall({
         systemInstruction,
         messages: [{ role: 'user', content: `Extract courses from this syllabus:\n\n${rawText.slice(0, 30000)}` }],
-        jsonMode: true
+        jsonMode: true,
+        modelTier: 'heavy',
+        thinkingLevel: 'low'
       });
 
       let parsed: any = {};
@@ -3697,7 +3822,7 @@ Output JSON format:
         systemInstruction,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
-        tier: 'studio'
+        modelTier: 'heavy'
       });
 
       const cleaned = (aiResponse || '').replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -3828,7 +3953,7 @@ Return your response in clean Markdown formatting ready for direct insertion int
         systemInstruction,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.35,
-        tier: 'studio'
+        modelTier: 'heavy'
       });
 
       return res.json({
@@ -3928,7 +4053,7 @@ Output JSON schema:
         systemInstruction,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.2,
-        tier: 'studio'
+        modelTier: 'heavy'
       });
 
       const cleaned = (aiResponse || '').replace(/```json/gi, '').replace(/```/g, '').trim();
@@ -3986,7 +4111,7 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
         systemInstruction,
         messages: [{ role: 'user', content: prompt }],
         temperature: 0.3,
-        tier: 'studio'
+        modelTier: 'heavy'
       });
 
       return res.json({ text: (aiResponse || selectedText).trim(), creditsRemaining: spend.balance });
@@ -4793,7 +4918,15 @@ You MUST return a JSON object containing structured study assets with this exact
           }
         };
 
-        const visionCandidateModels = Array.from(new Set([GEMINI_STANDARD_MODEL, ...GEMINI_FALLBACK_MODELS]));
+        const visionCandidateModels = buildModelChain(
+          'fast',
+          {
+            fastPrimary: GEMINI_FAST_PRIMARY,
+            fallbacks: GEMINI_FALLBACK_MODELS,
+            heavyModel: GEMINI_HEAVY_MODEL,
+          },
+          false
+        );
         let rawText = '';
         let lastVisionErr: any = null;
         for (const model of visionCandidateModels) {
@@ -4811,6 +4944,7 @@ You MUST return a JSON object containing structured study assets with this exact
               }
             });
             if (response?.text) {
+              console.log(`[AI] tier=fast model=${model}`);
               rawText = response.text;
               break;
             }
