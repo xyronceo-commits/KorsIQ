@@ -162,6 +162,23 @@ function rowToMaterial(row: any, urls: Record<string, string> = {}) {
   };
 }
 
+export function isUserMemberOfGroup(
+  group: { id?: string; ownerId?: string; owner_id?: string; members?: any[] },
+  userId: string,
+  memberCircleIds?: Set<string>
+): boolean {
+  if (!userId) return false;
+  const ownerId = group.ownerId ?? group.owner_id;
+  if (ownerId === userId) return true;
+  if (group.id && memberCircleIds?.has(String(group.id))) return true;
+  if (Array.isArray(group.members)) {
+    return group.members.some((m: any) =>
+      typeof m === 'string' ? m === userId : m?.userId === userId
+    );
+  }
+  return false;
+}
+
 function rowToGroup(row: any, materials: any[] = []): StudyGroup {
   const members = (row.members || []) as (string | GroupMember)[];
   return {
@@ -776,16 +793,30 @@ export const DBService = {
 
   // ---------------- Study Groups ----------------
   async getGroups(userId: string): Promise<StudyGroup[]> {
-    const cachedGroups = readCache<StudyGroup[]>('groups', userId, []);
+    const cachedGroups = readCache<StudyGroup[]>('groups', userId, [])
+      .filter((g) => isUserMemberOfGroup(g, userId));
     try {
-      // Row-level security already limits this to public groups + groups the user belongs to
-      const { data, error } = await supabase
-        .from('study_groups')
-        .select('*')
-        .order('updated_at', { ascending: false });
+      // RLS allows reading public/general circles for discovery as well as circles the user belongs to.
+      // Filter strictly to circles the user actually owns or has joined so unjoined public circles
+      // never appear as automatically joined.
+      const [{ data, error }, membershipRes] = await Promise.all([
+        supabase
+          .from('study_groups')
+          .select('*')
+          .order('updated_at', { ascending: false }),
+        supabase
+          .from('circle_members')
+          .select('circle_id')
+          .eq('user_id', userId)
+      ]);
       if (error) throw error;
 
-      const rows = data || [];
+      const memberCircleIds = new Set<string>(
+        Array.isArray(membershipRes?.data)
+          ? membershipRes.data.map((m: any) => String(m.circle_id))
+          : []
+      );
+      const rows = (data || []).filter((row) => isUserMemberOfGroup(row, userId, memberCircleIds));
       const materialsByGroup = await loadGroupMaterials(rows.map((r) => r.id));
       const groups = rows.map((row) => rowToGroup(row, materialsByGroup[row.id] || []));
       writeCache('groups', userId, groups);

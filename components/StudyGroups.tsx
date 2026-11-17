@@ -61,6 +61,15 @@ export const StudyGroups: React.FC<StudyGroupsProps> = ({
   
   // Selection
   const [activeGroupId, setActiveGroupId] = useState<string | null>(groups[0]?.id || null);
+  useEffect(() => {
+    if (groups.length === 0) {
+      if (activeGroupId !== null) setActiveGroupId(null);
+      return;
+    }
+    if (!activeGroupId || !groups.some((g) => g.id === activeGroupId)) {
+      setActiveGroupId(groups[0].id);
+    }
+  }, [groups, activeGroupId]);
   const activeGroup = groups.find(g => g.id === activeGroupId) || null;
   const isOwner = Boolean(activeGroup && activeGroup.ownerId === currentUserId);
   const isCoOwner = Boolean(
