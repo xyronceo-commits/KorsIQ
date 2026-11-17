@@ -97,7 +97,22 @@ const StudyHub: React.FC<StudyHubProps> = ({
       } catch {}
     }
   }, [selectedCourseId, courses]);
-  const [activeTool, setActiveTool] = useState<'summary' | 'flashcards' | 'quiz' | 'test' | 'podcast' | 'library' | 'scanner' | 'ai'>('summary');
+  const [activeTool, setActiveTool] = useState<'summary' | 'flashcards' | 'quiz' | 'test' | 'podcast' | 'library' | 'scanner' | 'ai'>(() => {
+    try {
+      const saved = localStorage.getItem('korsiq_last_hub_tool');
+      const valid = ['summary', 'flashcards', 'quiz', 'test', 'podcast', 'library', 'scanner', 'ai'];
+      if (saved && valid.includes(saved)) {
+        return saved as any;
+      }
+    } catch {}
+    return 'summary';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('korsiq_last_hub_tool', activeTool);
+    } catch {}
+  }, [activeTool]);
   const [landingView, setLandingView] = useState<'courses' | 'ai'>('courses');
   const [loading, setLoading] = useState(false);
   const [insufficientCreditsNotice, setInsufficientCreditsNotice] = useState<{
@@ -2237,45 +2252,69 @@ const StudyHub: React.FC<StudyHubProps> = ({
               );
             })()}
 
-            {activeTool === 'test' && !activeHub.tests && fileContent && (
-              <div className="flex flex-col items-center justify-center h-[400px] gap-8 animate-in fade-in duration-500">
-                  <div className="w-20 h-20 bg-emerald-55 text-emerald-600 bg-emerald-50 rounded-full flex items-center justify-center">
+            {activeTool === 'test' && !activeHub.tests && (fileContent || hubHistory.some((h) => h.toolType === 'test')) && (
+              <div className="space-y-6">
+                {renderToolHistoryPanel('test')}
+                <div className="flex flex-col items-center justify-center h-[360px] gap-6 animate-in fade-in duration-500">
+                  <div className="w-20 h-20 bg-emerald-50 text-emerald-600 rounded-full flex items-center justify-center">
                     <Award size={36} />
                   </div>
-                  <button 
-                    onClick={() => generateTool('test')} 
-                    className="px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shadow-xs transition-colors text-xs cursor-pointer min-h-[44px]"
-                  >
-                    {BILLING_ENABLED ? 'Generate Practice Test — 2 credits' : 'Generate Practice Test'}
-                  </button>
+                  <div className="flex items-center gap-3 flex-wrap justify-center">
+                    {renderHistoryButton('test')}
+                    {fileContent && (
+                      <button 
+                        onClick={() => generateTool('test')} 
+                        className="px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shadow-xs transition-colors text-xs cursor-pointer min-h-[44px]"
+                      >
+                        {BILLING_ENABLED ? 'Generate Practice Test — 2 credits' : 'Generate Practice Test'}
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 
-            {activeTool === 'quiz' && !activeHub.quizzes && fileContent && (
-              <div className="flex flex-col items-center justify-center h-[400px] gap-8">
+            {activeTool === 'quiz' && !activeHub.quizzes && (fileContent || hubHistory.some((h) => h.toolType === 'quiz')) && (
+              <div className="space-y-6">
+                {renderToolHistoryPanel('quiz')}
+                <div className="flex flex-col items-center justify-center h-[360px] gap-6">
                   <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center text-blue-600">
                     {ICONS.CheckCircle}
                   </div>
-                  <button 
-                    onClick={() => generateTool('quiz')} 
-                    className="px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shadow-xs transition-colors text-xs cursor-pointer min-h-[44px]"
-                  >
-                    {BILLING_ENABLED ? 'Practice Quiz — 2 credits' : 'Practice Quiz'}
-                  </button>
+                  <div className="flex items-center gap-3 flex-wrap justify-center">
+                    {renderHistoryButton('quiz')}
+                    {fileContent && (
+                      <button 
+                        onClick={() => generateTool('quiz')} 
+                        className="px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shadow-xs transition-colors text-xs cursor-pointer min-h-[44px]"
+                      >
+                        {BILLING_ENABLED ? 'Practice Quiz — 2 credits' : 'Practice Quiz'}
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 
-            {activeTool === 'flashcards' && !activeHub.flashcards && fileContent && (
-               <div className="flex flex-col items-center justify-center h-[400px] gap-8">
+            {activeTool === 'flashcards' && !activeHub.flashcards && (fileContent || hubHistory.some((h) => h.toolType === 'flashcards')) && (
+              <div className="space-y-6">
+                {renderToolHistoryPanel('flashcards')}
+                <div className="flex flex-col items-center justify-center h-[360px] gap-6">
                   <div className="w-20 h-20 bg-blue-50 rounded-full flex items-center justify-center text-blue-600">
                     {ICONS.RotateCcw}
                   </div>
-                  <button 
-                    onClick={() => generateTool('flashcards')} 
-                    className="px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shadow-xs transition-colors text-xs cursor-pointer min-h-[44px]"
-                  >
-                    {BILLING_ENABLED ? 'Flashcards — 2 credits' : 'Flashcards'}
-                  </button>
+                  <div className="flex items-center gap-3 flex-wrap justify-center">
+                    {renderHistoryButton('flashcards')}
+                    {fileContent && (
+                      <button 
+                        onClick={() => generateTool('flashcards')} 
+                        className="px-8 py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-lg font-semibold shadow-xs transition-colors text-xs cursor-pointer min-h-[44px]"
+                      >
+                        {BILLING_ENABLED ? 'Flashcards — 2 credits' : 'Flashcards'}
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
 
