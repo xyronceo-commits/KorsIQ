@@ -1,31 +1,43 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { Course, UserProfile, StudySession, AppState, StudyHubData, StudyGroup, AppNotification } from './types';
 import { ICONS } from './constants';
 import { BILLING_ENABLED, getPlanDisplayName } from './lib/plans';
 import { GraduationCap, Menu, X, Lock, Sun, Moon, CheckCheck, Trash2 } from 'lucide-react';
-import Onboarding from './components/Onboarding';
-import LandingPage from './components/LandingPage';
 import Dashboard from './components/Dashboard';
-import CourseManager from './components/CourseManager';
-import ScheduleView from './components/ScheduleView';
-import StudyHub from './components/StudyHub';
-import StudyGroups from './components/StudyGroups';
-import CGPACalculator from './components/CGPACalculator';
-import AcademicStudio from './components/AcademicStudio';
-import PomodoroTimer from './components/PomodoroTimer';
-import TimetableView from './components/TimetableView';
-import Profile from './components/Profile';
 import { UserAvatar } from './components/UserAvatar';
-import Tutorial from './components/Tutorial';
 import Auth, { type AuthMode } from './components/Auth';
 import type { Session } from '@supabase/supabase-js';
 import { supabase, toAuthUser, setCurrentUserId, getAccessToken, type AuthUser } from './lib/supabase';
 import { DBService } from './services/db';
 import { cleanupLegacyApiKeyStorage, GeminiService } from './services/gemini';
 import KorsIQLogo from './components/KorsIQLogo';
-import StudyPlannerView from './components/StudyPlannerView';
-import ResourcesView from './components/ResourcesView';
-import AdminApp from './components/AdminApp';
+
+const Onboarding = lazy(() => import('./components/Onboarding'));
+const LandingPage = lazy(() => import('./components/LandingPage'));
+const CourseManager = lazy(() => import('./components/CourseManager'));
+const ScheduleView = lazy(() => import('./components/ScheduleView'));
+const StudyHub = lazy(() => import('./components/StudyHub'));
+const StudyGroups = lazy(() => import('./components/StudyGroups'));
+const CGPACalculator = lazy(() => import('./components/CGPACalculator'));
+const AcademicStudio = lazy(() => import('./components/AcademicStudio'));
+const PomodoroTimer = lazy(() => import('./components/PomodoroTimer'));
+const TimetableView = lazy(() => import('./components/TimetableView'));
+const Profile = lazy(() => import('./components/Profile'));
+const Tutorial = lazy(() => import('./components/Tutorial'));
+const StudyPlannerView = lazy(() => import('./components/StudyPlannerView'));
+const ResourcesView = lazy(() => import('./components/ResourcesView'));
+const AdminApp = lazy(() => import('./components/AdminApp'));
+
+const PageSkeleton: React.FC = () => (
+  <div className="space-y-4 animate-pulse p-2" aria-label="Loading view">
+    <div className="h-7 bg-slate-200 dark:bg-slate-800 rounded-lg w-48" />
+    <div className="h-4 bg-slate-100 dark:bg-slate-800/70 rounded w-72" />
+    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2">
+      <div className="h-32 bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg" />
+      <div className="h-32 bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg" />
+    </div>
+  </div>
+);
 
 const App: React.FC = () => {
   const [isAdminRoute, setIsAdminRoute] = useState<boolean>(() => {
@@ -328,21 +340,29 @@ const App: React.FC = () => {
     }
   }, [activeTab, authUser, showAuth, authMode]);
 
-  // Load User Data & Profile from Supabase
+  // Load User Data & Profile from Supabase (with instant cache hydration + no redundant startup write-back)
   const isInitialDataLoadedRef = useRef(false);
-  const loadUserData = async (user: AuthUser) => {
+  const skipProfileSyncRef = useRef(false);
+  const skipCoursesSyncRef = useRef(false);
+  const skipScheduleSyncRef = useRef(false);
+
+  const loadUserData = async (user: AuthUser, hasCachedProfile = false) => {
     isInitialDataLoadedRef.current = false;
     try {
       const uid = user.uid;
-      let dbProfile = await DBService.getProfile(uid);
+      const [dbProfile, dbCourses, dbSchedule] = await Promise.all([
+        DBService.getProfile(uid),
+        DBService.getCourses(uid),
+        DBService.getSchedule(uid),
+      ]);
 
       if (dbProfile) {
         if ((!dbProfile.name || dbProfile.name === 'Scholar') && user.displayName) {
           dbProfile.name = user.displayName;
         }
+        skipProfileSyncRef.current = true;
         setProfile(dbProfile);
-      } else {
-        // Create initial default profile in Supabase for new user
+      } else if (!hasCachedProfile) {
         const newProfile: UserProfile = {
           name: user.displayName || user.email?.split('@')[0] || 'Scholar',
           email: user.email || '',
@@ -360,21 +380,25 @@ const App: React.FC = () => {
           notifications: { messages: true, sessions: true, aiContent: true },
           semesterEnd: ''
         };
+        skipProfileSyncRef.current = true;
         await DBService.saveProfile(uid, newProfile);
         setProfile(newProfile);
       }
 
-      const [dbCourses, dbSchedule, dbHubs, dbGroups] = await Promise.all([
-        DBService.getCourses(uid),
-        DBService.getSchedule(uid),
-        DBService.getHubs(uid),
-        DBService.getGroups(uid)
-      ]);
+      skipCoursesSyncRef.current = true;
       setCourses(dbCourses);
+      skipScheduleSyncRef.current = true;
       setSchedule(dbSchedule);
-      setHubs(dbHubs);
-      setGroups(dbGroups);
       isInitialDataLoadedRef.current = true;
+
+      // Load heavier secondary collections in the background without blocking Dashboard render
+      Promise.all([
+        DBService.getHubs(uid),
+        DBService.getGroups(uid),
+      ]).then(([dbHubs, dbGroups]) => {
+        setHubs(dbHubs);
+        setGroups(dbGroups);
+      }).catch(() => {});
     } catch (error) {
       console.error('Failed to load user data:', error);
     }
@@ -407,9 +431,29 @@ const App: React.FC = () => {
         return;
       }
       loadedUidRef.current = user.uid;
-      setAuthLoading(true);
 
-      await loadUserData(user);
+      // Instant cold-start hydration from local cache for APK / slow mobile networks
+      const cached = DBService.readUserCacheSnapshot(user.uid);
+      const hasCachedProfile = Boolean(cached.profile);
+      if (hasCachedProfile && cached.profile) {
+        skipProfileSyncRef.current = true;
+        setProfile(cached.profile);
+        if (cached.courses.length > 0) {
+          skipCoursesSyncRef.current = true;
+          setCourses(cached.courses);
+        }
+        if (cached.schedule.length > 0) {
+          skipScheduleSyncRef.current = true;
+          setSchedule(cached.schedule);
+        }
+        if (Object.keys(cached.hubs).length > 0) setHubs(cached.hubs);
+        if (cached.groups.length > 0) setGroups(cached.groups);
+        setAuthLoading(false);
+      } else {
+        setAuthLoading(true);
+      }
+
+      await loadUserData(user, hasCachedProfile);
       if (!cancelled) setAuthLoading(false);
     };
 
@@ -428,31 +472,56 @@ const App: React.FC = () => {
     };
   }, []);
 
-  // DB Connection Health Checker
+  // DB Connection Health Checker (visibility-aware + instant browser online/offline)
   useEffect(() => {
     const checkDb = async () => {
+      if (typeof navigator !== 'undefined' && !navigator.onLine) {
+        setDbConnected(false);
+        return;
+      }
+      if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
       const isConnected = await DBService.checkConnection();
       setDbConnected(isConnected);
     };
+    const handleOnline = () => { checkDb(); };
+    const handleOffline = () => { setDbConnected(false); };
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
     checkDb();
-    const interval = setInterval(checkDb, 30000);
-    return () => clearInterval(interval);
+    const interval = setInterval(checkDb, 60000);
+    return () => {
+      clearInterval(interval);
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, []);
 
-  // Sync state changes to DB
+  // Sync state changes to DB (skip hydration writes on startup)
   useEffect(() => {
+    if (skipProfileSyncRef.current) {
+      skipProfileSyncRef.current = false;
+      return;
+    }
     if (authUser?.uid && profile?.onboarded) {
       DBService.saveProfile(authUser.uid, profile);
     }
   }, [profile, authUser?.uid]);
 
   useEffect(() => {
+    if (skipCoursesSyncRef.current) {
+      skipCoursesSyncRef.current = false;
+      return;
+    }
     if (authUser?.uid && profile?.onboarded && (isInitialDataLoadedRef.current || courses.length > 0)) {
       DBService.saveCourses(authUser.uid, courses);
     }
   }, [courses, profile?.onboarded, authUser?.uid]);
 
   useEffect(() => {
+    if (skipScheduleSyncRef.current) {
+      skipScheduleSyncRef.current = false;
+      return;
+    }
     if (authUser?.uid && profile?.onboarded && (isInitialDataLoadedRef.current || schedule.length > 0)) {
       DBService.saveSchedule(authUser.uid, schedule);
     }
@@ -704,12 +773,14 @@ const App: React.FC = () => {
   // 0. Admin Portal Route Handling (/admin) — independent of student auth loading
   if (isAdminRoute) {
     return (
-      <AdminApp 
-        onExit={() => {
-          window.history.pushState({}, '', '/');
-          setIsAdminRoute(false);
-        }} 
-      />
+      <Suspense fallback={<PageSkeleton />}>
+        <AdminApp 
+          onExit={() => {
+            window.history.pushState({}, '', '/');
+            setIsAdminRoute(false);
+          }} 
+        />
+      </Suspense>
     );
   }
 
@@ -766,16 +837,18 @@ const App: React.FC = () => {
       );
     }
     return (
-      <LandingPage 
-        onStart={() => {
-          setAuthMode('signup');
-          setShowAuth(true);
-        }} 
-        onSignIn={() => {
-          setAuthMode('signin');
-          setShowAuth(true);
-        }} 
-      />
+      <Suspense fallback={<PageSkeleton />}>
+        <LandingPage 
+          onStart={() => {
+            setAuthMode('signup');
+            setShowAuth(true);
+          }} 
+          onSignIn={() => {
+            setAuthMode('signin');
+            setShowAuth(true);
+          }} 
+        />
+      </Suspense>
     );
   }
 
@@ -795,7 +868,11 @@ const App: React.FC = () => {
 
   // 5. Onboarding View
   if (profile && !profile.onboarded) {
-    return <Onboarding userEmail={profile.email} initialProfile={profile} onComplete={handleOnboardingComplete} />;
+    return (
+      <Suspense fallback={<PageSkeleton />}>
+        <Onboarding userEmail={profile.email} initialProfile={profile} onComplete={handleOnboardingComplete} />
+      </Suspense>
+    );
   }
 
   // 6. Main Protected Application View
@@ -1313,7 +1390,9 @@ const App: React.FC = () => {
               </div>
             )}
 
-            {renderContent()}
+            <Suspense fallback={<PageSkeleton />}>
+              {renderContent()}
+            </Suspense>
           </div>
         </main>
 
@@ -1338,7 +1417,9 @@ const App: React.FC = () => {
       </div>
 
       {profile && profile.onboarded && !profile.tutorialSeen && (
-         <Tutorial onComplete={handleTutorialComplete} />
+        <Suspense fallback={null}>
+          <Tutorial onComplete={handleTutorialComplete} />
+        </Suspense>
       )}
     </div>
   );

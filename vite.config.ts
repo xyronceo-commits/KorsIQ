@@ -14,6 +14,20 @@ export default defineConfig(() => {
         alias: {
           '@': path.resolve(__dirname, '.'),
         }
-      }
+      },
+      build: {
+        rollupOptions: {
+          output: {
+            manualChunks: {
+              'vendor-react': ['react', 'react-dom'],
+              'vendor-supabase': ['@supabase/supabase-js'],
+              'vendor-exports': ['jspdf', 'pptxgenjs', 'jszip'],
+              'vendor-charts': ['recharts'],
+              'vendor-motion': ['motion'],
+              'vendor-markdown': ['react-markdown'],
+            },
+          },
+        },
+      },
     };
 });

@@ -127,6 +127,9 @@
     }
     </script>
 
+    <link rel="preconnect" href="https://cdn.tailwindcss.com" crossorigin />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
       tailwind.config = {
@@ -166,50 +169,21 @@
         }
       }
     </script>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <link rel="stylesheet" href="/index.css">
-  <script type="importmap">
-{
-  "imports": {
-    "react-dom/": "https://esm.sh/react-dom@^19.2.4/",
-    "@google/genai": "https://esm.sh/@google/genai@^1.38.0",
-    "lucide-react": "https://esm.sh/lucide-react@^0.563.0",
-    "react/": "https://esm.sh/react@^19.2.4/",
-    "react": "https://esm.sh/react@^19.2.4"
-  }
-}
-</script>
 </head>
   <body>
     <div id="root">
-      <!-- Semantic Static Fallback for Search Engine Crawlers & No-JS Browsers -->
-      <noscript>
-        <header style="padding: 24px; text-align: center;">
-          <img src="/korsiq-logo.png" alt="KorsIQ Logo" width="64" height="64" style="margin: 0 auto 12px auto; display: block;" />
-          <h1 style="font-size: 28px; font-weight: 800; color: #2563EB; margin-bottom: 8px;">KorsIQ — Outsmart Your Syllabus</h1>
-          <p style="font-size: 16px; color: #5B6472; max-width: 600px; margin: 0 auto 24px auto;">
-            AI-powered academic productivity workspace. Your courses, CGPA, study plan and coursework in one calm workspace.
-          </p>
-        </header>
-
-        <main style="max-width: 800px; margin: 0 auto; padding: 20px;">
-          <h2>What's Inside KorsIQ</h2>
-          <ul>
-            <li><strong>A CGPA you can trust:</strong> Exact calculation from your units and grades. AI explains it, never works it out.</li>
-            <li><strong>A plan you approve:</strong> A realistic study timetable. Nothing is scheduled until you say yes.</li>
-            <li><strong>Academic Studio:</strong> Outline, draft and export research and assignments, one section at a time.</li>
-            <li><strong>Private Circles:</strong> Study with friends. Files and notes are visible only to circle members.</li>
-            <li><strong>Your Resource Library:</strong> Handouts and notes in one place, ready for practice, flashcards, quizzes, and summaries.</li>
-          </ul>
-
-          <h2>Simple Pricing</h2>
-          <ul>
-            <li><strong>Free (₦0/month):</strong> CGPA and course tracking, study timetable, limited AI help.</li>
-            <li><strong>Plus (₦7,500/month):</strong> More AI help, Lite Studio and exports, create circles.</li>
-            <li><strong>Academic Studio (₦15,000/month):</strong> Full Studio workspace, version history, highest AI allowance.</li>
-          </ul>
-        </main>
-      </noscript>
+      <!-- Instant App Shell Skeleton for Android APK / Slow Mobile Cold Start -->
+      <div style="min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;background:#F8FAFC;font-family:Inter,system-ui,-apple-system,sans-serif;padding:24px;text-align:center;">
+        <img src="/korsiq-logo-192.png" alt="KorsIQ" width="52" height="52" style="border-radius:12px;margin-bottom:14px;" />
+        <div style="width:120px;height:4px;background:#E5E7EB;border-radius:999px;overflow:hidden;">
+          <div style="width:45%;height:100%;background:#2563EB;border-radius:999px;"></div>
+        </div>
+        <noscript>
+          <p style="margin-top:16px;color:#111827;font-size:14px;">KorsIQ — Outsmart Your Syllabus. Enable JavaScript to continue.</p>
+        </noscript>
+      </div>
     </div>
   <script type="module" src="/index.tsx"></script>
 </body>
