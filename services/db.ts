@@ -1,4 +1,5 @@
 import { supabase, getAccessToken, getCurrentUserId } from '../lib/supabase';
+import { isUserCircle } from '../lib/circleMembership';
 import {
   UserProfile,
   Course,
@@ -776,16 +777,38 @@ export const DBService = {
 
   // ---------------- Study Groups ----------------
   async getGroups(userId: string): Promise<StudyGroup[]> {
-    const cachedGroups = readCache<StudyGroup[]>('groups', userId, []);
+    // A cached list from an older version could contain other people's general circles. Never trust it blindly.
+    const cachedGroups = readCache<StudyGroup[]>('groups', userId, []).filter((g) => isUserCircle(g, userId));
     try {
-      // Row-level security already limits this to public groups + groups the user belongs to
-      const { data, error } = await supabase
-        .from('study_groups')
-        .select('*')
-        .order('updated_at', { ascending: false });
-      if (error) throw error;
+      // Row-level security lets every user SEE all public/general circles so they can be browsed and joined.
+      // Seeing a circle is not the same as belonging to it, so only fetch circles this user owns or is a member of.
+      const [ownedRes, objectMemberRes, stringMemberRes, memberRowsRes] = await Promise.all([
+        supabase.from('study_groups').select('*').eq('owner_id', userId),
+        supabase.from('study_groups').select('*').contains('members', [{ userId }]),
+        supabase.from('study_groups').select('*').contains('members', [userId]),
+        supabase.from('circle_members').select('circle_id').eq('user_id', userId)
+      ]);
+      if (ownedRes.error) throw ownedRes.error;
 
-      const rows = data || [];
+      const byId = new Map<string, any>();
+      for (const row of [...(ownedRes.data || []), ...(objectMemberRes.data || []), ...(stringMemberRes.data || [])]) {
+        byId.set(row.id, row);
+      }
+
+      // Circles the user belongs to through a circle_members row (this includes general circles they chose to join)
+      const memberCircleIds = new Set<string>((memberRowsRes.data || []).map((r: any) => r.circle_id));
+      const missingIds = Array.from(memberCircleIds).filter((id) => !byId.has(id));
+      if (missingIds.length > 0) {
+        const { data: extra, error: extraErr } = await supabase.from('study_groups').select('*').in('id', missingIds);
+        if (extraErr) throw extraErr;
+        for (const row of extra || []) byId.set(row.id, row);
+      }
+
+      // Final guard: keep only circles that really are the user's own.
+      const rows = Array.from(byId.values())
+        .filter((row) => isUserCircle(row, userId, memberCircleIds))
+        .sort((a, b) => String(b.updated_at || '').localeCompare(String(a.updated_at || '')));
+
       const materialsByGroup = await loadGroupMaterials(rows.map((r) => r.id));
       const groups = rows.map((row) => rowToGroup(row, materialsByGroup[row.id] || []));
       writeCache('groups', userId, groups);

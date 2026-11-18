@@ -614,7 +614,7 @@ export const StudyGroups: React.FC<StudyGroupsProps> = ({
 
         {/* Header Actions */}
         <div className="flex items-center gap-2 flex-wrap">
-          {activeGroup && (
+          {activeGroup && activeGroup.type !== 'general' && activeGroup.visibility !== 'public' && (
             <button
               onClick={handleCopyInvite}
               className="inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-white dark:bg-slate-800 hover:bg-slate-50 dark:hover:bg-slate-700 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 text-xs font-medium rounded-lg min-h-[44px] transition-colors cursor-pointer"
