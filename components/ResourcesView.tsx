@@ -3,6 +3,7 @@ import { UserFile, Course, UserProfile, StudyGroup } from '../types';
 import { DBService } from '../services/db';
 import { getCurrentUserId } from '../lib/supabase';
 import { BETA_PLAN_LIMITS } from '../constants';
+import { ResourceSearch } from './ResourceSearch';
 import { 
   Search, 
   Upload, 
@@ -41,6 +42,8 @@ export const ResourcesView: React.FC<ResourcesViewProps> = ({
   const [isUploading, setIsUploading] = useState(false);
   const [retryingFileId, setRetryingFileId] = useState<string | null>(null);
   const [uploadSuccessMsg, setUploadSuccessMsg] = useState<string | null>(null);
+  const [isSearchExpanded, setIsSearchExpanded] = useState(false);
+  const [isSearchActive, setIsSearchActive] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchFiles = async () => {
@@ -245,8 +248,8 @@ export const ResourcesView: React.FC<ResourcesViewProps> = ({
       />
 
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-[#E5E7EB] dark:border-slate-800 pb-5">
-        <div>
+      <div className="flex flex-wrap items-center justify-between gap-3 sm:gap-4 border-b border-[#E5E7EB] dark:border-slate-800 pb-5">
+        <div className="mr-auto">
           <h1 className="text-xl sm:text-2xl font-bold text-[#111827] dark:text-white tracking-tight">
             Resources
           </h1>
@@ -255,11 +258,21 @@ export const ResourcesView: React.FC<ResourcesViewProps> = ({
           </p>
         </div>
 
+        <div className={isSearchExpanded ? 'order-3 w-full' : 'order-2'}>
+          <ResourceSearch
+            courses={courses}
+            openActionLabel="Study tools"
+            onOpenFile={(file) => onOpenHub(file.courseId || courses[0]?.id || '')}
+            onExpandedChange={setIsSearchExpanded}
+            onActiveSearchChange={setIsSearchActive}
+          />
+        </div>
+
         {/* Single Primary Action Button */}
         <button
           onClick={() => fileInputRef.current?.click()}
           disabled={isUploading}
-          className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-60 text-white text-xs sm:text-sm font-medium rounded-lg shadow-sm min-h-[44px] transition-colors cursor-pointer"
+          className={`${isSearchExpanded ? 'order-2' : 'order-3'} inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#2563EB] hover:bg-[#1D4ED8] disabled:opacity-60 text-white text-xs sm:text-sm font-medium rounded-lg shadow-sm min-h-[44px] transition-colors cursor-pointer`}
         >
           {isUploading ? <Loader2 size={16} className="animate-spin" /> : <Upload size={16} />}
           <span>{isUploading ? 'Uploading file...' : 'Upload file'}</span>
@@ -325,7 +338,9 @@ export const ResourcesView: React.FC<ResourcesViewProps> = ({
         </div>
       )}
 
-      {/* Search, Filter Chips and Quota Bar */}
+      {/* Search, Filter Chips and Quota Bar (restored when ResourceSearch is closed/cleared) */}
+      {!isSearchActive && (
+      <>
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 items-center">
         {/* Search */}
         <div className="relative">
@@ -566,6 +581,8 @@ export const ResourcesView: React.FC<ResourcesViewProps> = ({
             ))}
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

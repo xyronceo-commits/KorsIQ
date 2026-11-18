@@ -56,6 +56,18 @@ const formatSize = (bytes: number) => {
 const sanitizeFileName = (name: string) => name.replace(/[^a-zA-Z0-9.\-_]/g, '_');
 const rand = (len = 5) => Math.random().toString(36).substring(2, 2 + len);
 
+/** Escape LIKE wildcards and PostgREST .or() delimiters so user input cannot break filter syntax. */
+export function sanitizeSearchTerm(raw: string): string {
+  return raw
+    .trim()
+    .replace(/\\/g, '\\\\')
+    .replace(/%/g, '\\%')
+    .replace(/_/g, '\\_')
+    .replace(/[,()]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 async function fileToBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -2616,6 +2628,63 @@ export const DBService = {
       console.error('getUserFiles error:', err);
       return readCache<UserFile[]>('files', userId, []);
     }
+  },
+
+  async searchUserFiles(params: {
+    userId: string;
+    query: string;
+    fileType?: 'PDF' | 'PPT' | 'DOCX' | null;
+    courseCode?: string | null;
+    signal?: AbortSignal;
+  }): Promise<UserFile[]> {
+    const { userId, query, fileType, courseCode, signal } = params;
+    if (!userId) return [];
+
+    const sanitized = sanitizeSearchTerm(query);
+    if (!sanitized && !fileType && !courseCode) return [];
+
+    let builder = supabase
+      .from('user_files')
+      .select('*')
+      .eq('user_id', userId);
+
+    if (sanitized) {
+      builder = builder.or(
+        `file_name.ilike.%${sanitized}%,course_code.ilike.%${sanitized}%,course_title.ilike.%${sanitized}%`
+      );
+    }
+
+    if (fileType === 'PDF') {
+      builder = builder.or('file_type.ilike.%pdf%,file_name.ilike.%.pdf');
+    } else if (fileType === 'PPT') {
+      builder = builder.or(
+        'file_type.ilike.%presentation%,file_type.ilike.%powerpoint%,file_name.ilike.%.ppt,file_name.ilike.%.pptx'
+      );
+    } else if (fileType === 'DOCX') {
+      builder = builder.or(
+        'file_type.ilike.%word%,file_type.ilike.%document%,file_name.ilike.%.doc,file_name.ilike.%.docx'
+      );
+    }
+
+    if (courseCode) {
+      builder = builder.eq('course_code', courseCode);
+    }
+
+    builder = builder.order('ts', { ascending: false }).limit(30);
+
+    if (signal) {
+      builder = builder.abortSignal(signal);
+    }
+
+    const { data, error } = await builder;
+    if (error) throw error;
+
+    const rows = data || [];
+    const urls = await signedUrlMap(
+      USER_FILES_BUCKET,
+      rows.map((r) => r.storage_path)
+    );
+    return rows.map((r) => rowToUserFile(r, urls));
   },
 
   async uploadFileToStorage(
