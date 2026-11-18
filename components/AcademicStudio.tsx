@@ -37,7 +37,6 @@ import {
   Compass,
   Zap,
   Bookmark,
-  Share2,
   Crown,
   ListOrdered
 } from 'lucide-react';
@@ -45,7 +44,11 @@ import {
   AcademicDocument,
   AcademicDocumentType,
   CitationStyle,
+  Course,
+  StudioBrief,
   StudioDocumentStatus,
+  StudioFileFormat,
+  StudioJob,
   StudioOutlineItem,
   StudioSection,
   StudioReference,
@@ -53,6 +56,7 @@ import {
   StudioVersion,
   StudioVisualBlock,
   StudioVisualPreferences,
+  UserFile,
   UserProfile,
   hasStudioPrivileges,
   hasFullStudioPrivileges
@@ -64,14 +68,20 @@ import { downloadPdf } from '../utils/pdfExport';
 import { downloadPptx } from '../utils/pptxExport';
 import { DEFAULT_VISUAL_PREFERENCES, hasAnyVisualElementEnabled } from '../utils/visualRenderer';
 import { BILLING_ENABLED, can, getPlanDisplayName } from '../lib/plans';
+import { STUDIO_DOWNLOAD_NOTICE } from '../lib/studioV2';
 import KorsIQLogo from './KorsIQLogo';
 import SubscriptionCheckoutModal from './SubscriptionCheckoutModal';
 import StudioVisualDesignPanel from './StudioVisualDesignPanel';
 import StudioVisualCard from './StudioVisualCard';
+import StudioBriefForm from './StudioBriefForm';
+import StudioOutlineReview from './StudioOutlineReview';
+import StudioJobProgress from './StudioJobProgress';
 
 interface AcademicStudioProps {
   userId: string;
   profile: UserProfile;
+  courses?: Course[];
+  addNotification?: (type: any, title: string, message: string, link?: any) => void;
   setProfile?: (p: UserProfile) => void;
   onNavigateTab?: (tab: string) => void;
 }
@@ -98,6 +108,8 @@ const CITATION_STYLES: { id: CitationStyle; label: string; desc: string }[] = [
 export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   userId,
   profile,
+  courses = [],
+  addNotification,
   setProfile,
   onNavigateTab
 }) => {
@@ -161,6 +173,187 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     suggestions: StudioReviewSuggestion[];
   } | null>(null);
   const [isReviewLoading, setIsReviewLoading] = useState(false);
+
+  // Studio v2 Brief -> Outline -> Background Job State
+  const [v2View, setV2View] = useState<'list' | 'brief' | 'outline'>('list');
+  const [v2Brief, setV2Brief] = useState<StudioBrief | null>(null);
+  const [v2Outline, setV2Outline] = useState<StudioOutlineItem[]>([]);
+  const [isDraftingV2Outline, setIsDraftingV2Outline] = useState(false);
+  const [isStartingV2Job, setIsStartingV2Job] = useState(false);
+  const [studioJobs, setStudioJobs] = useState<StudioJob[]>([]);
+  const [userFiles, setUserFiles] = useState<UserFile[]>([]);
+  const [activeVariant, setActiveVariant] = useState<'primary' | 'document' | 'slides'>('primary');
+  const previousJobStatusRef = useRef<Record<string, string>>({});
+
+  // Load jobs, user files, and re-kick any stalled jobs on Studio open
+  const refreshStudioV2Jobs = async () => {
+    try {
+      const res = await GeminiService.getStudioV2Jobs();
+      const jobs: StudioJob[] = res.jobs || [];
+      setStudioJobs(jobs);
+
+      let anyTransitioned = false;
+      for (const j of jobs) {
+        const prev = previousJobStatusRef.current[j.id];
+        if (prev && (prev === 'queued' || prev === 'running') && prev !== j.status) {
+          anyTransitioned = true;
+          if (j.status === 'completed' || j.status === 'completed_with_issues') {
+            addNotification?.('content', 'Document ready', 'Your Academic Studio document finished generating.', 'studio');
+            showToast('Your document is ready to download.');
+          } else if (j.status === 'failed') {
+            addNotification?.('content', 'Generation failed', j.error || 'Background generation failed.', 'studio');
+            showToast('Document generation failed.');
+          } else if (j.status === 'cancelled') {
+            showToast('Generation cancelled. Partial draft saved.');
+          }
+        }
+        previousJobStatusRef.current[j.id] = j.status;
+      }
+
+      if (anyTransitioned && userId) {
+        const docs = await DBService.getAcademicDocuments(userId);
+        setDocuments(docs);
+      }
+    } catch {
+      // Non-blocking
+    }
+  };
+
+  useEffect(() => {
+    if (!userId) return;
+    GeminiService.reKickStudioV2Jobs().catch(() => {});
+    refreshStudioV2Jobs();
+    DBService.getUserFiles(userId).then(setUserFiles).catch(() => {});
+  }, [userId]);
+
+  // Poll active background jobs while any job is queued/running
+  useEffect(() => {
+    const hasActive = studioJobs.some((j) => j.status === 'queued' || j.status === 'running');
+    if (!hasActive) return;
+    const timer = window.setInterval(() => {
+      refreshStudioV2Jobs();
+    }, 3500);
+    return () => window.clearInterval(timer);
+  }, [studioJobs, userId]);
+
+  const handleV2DraftOutline = async (brief: StudioBrief) => {
+    setIsDraftingV2Outline(true);
+    try {
+      const res = await GeminiService.generateStudioV2Outline(brief);
+      setV2Brief(brief);
+      setV2Outline(res.outline || []);
+      setV2View('outline');
+    } catch (err: any) {
+      showToast(err?.message || 'Could not draft outline.');
+    } finally {
+      setIsDraftingV2Outline(false);
+    }
+  };
+
+  const handleV2StartJob = async () => {
+    if (!v2Brief || v2Outline.length === 0) return;
+    setIsStartingV2Job(true);
+    try {
+      const res = await GeminiService.createStudioV2Job({ brief: v2Brief, outline: v2Outline });
+      setV2View('list');
+      setV2Brief(null);
+      setV2Outline([]);
+      if (res.job) {
+        previousJobStatusRef.current[res.job.id] = res.job.status;
+        setStudioJobs((prev) => [res.job, ...prev.filter((j) => j.id !== res.job.id)]);
+      }
+      const docs = await DBService.getAcademicDocuments(userId);
+      setDocuments(docs);
+      showToast('Generation started in the background.');
+    } catch (err: any) {
+      showToast(err?.message || 'Could not start generation.');
+    } finally {
+      setIsStartingV2Job(false);
+    }
+  };
+
+  const handleV2CancelJob = async (jobId: string) => {
+    try {
+      const res = await GeminiService.cancelStudioV2Job(jobId);
+      if (res.job) {
+        setStudioJobs((prev) => prev.map((j) => (j.id === jobId ? res.job : j)));
+      }
+      showToast('Cancelling at the next step...');
+    } catch (err: any) {
+      showToast(err?.message || 'Could not cancel job.');
+    }
+  };
+
+  const handleV2ResumeJob = async (jobId: string) => {
+    try {
+      const res = await GeminiService.resumeStudioV2Job(jobId);
+      if (res.job) {
+        previousJobStatusRef.current[res.job.id] = res.job.status;
+        setStudioJobs((prev) => prev.map((j) => (j.id === jobId ? res.job : j)));
+      }
+      showToast('Resuming generation...');
+    } catch (err: any) {
+      showToast(err?.message || 'Could not resume job.');
+    }
+  };
+
+  const handleV2Download = async () => {
+    if (!activeDocument) return;
+    const variant =
+      activeVariant !== 'primary' ? activeDocument.convertedVariants?.[activeVariant] : undefined;
+    const targetDoc: AcademicDocument = variant
+      ? {
+          ...activeDocument,
+          fileFormat: variant.fileFormat,
+          sections: variant.sections,
+          contentBlocks: variant.contentBlocks,
+        }
+      : activeDocument;
+    const fmt: StudioFileFormat = targetDoc.fileFormat || (targetDoc.metadata?.preferredFormat as StudioFileFormat) || 'docx';
+    const safeTitle = (targetDoc.title || 'document').replace(/[^a-zA-Z0-9_-]/g, '_');
+
+    try {
+      if (fmt === 'pdf') {
+        downloadPdf(targetDoc, `${safeTitle}.pdf`);
+      } else if (fmt === 'pptx') {
+        await downloadPptx(targetDoc, `${safeTitle}.pptx`);
+      } else {
+        const blob = await generateDocxBlob(targetDoc);
+        downloadDocx(blob, `${safeTitle}.docx`);
+      }
+      showToast(`Downloaded ${safeTitle}.${fmt}`);
+    } catch {
+      showToast('Download failed. Please try again.');
+    }
+  };
+
+  const handleV2SwitchFormat = async (target: 'docx' | 'pdf' | 'convert_to_slides' | 'convert_to_document') => {
+    if (!activeDocument) return;
+    if (target === 'docx' || target === 'pdf') {
+      // Instant, free, zero AI call — renders from the same stored content blocks
+      const updated: AcademicDocument = {
+        ...activeDocument,
+        fileFormat: target,
+        metadata: { ...activeDocument.metadata, preferredFormat: target },
+      };
+      setDocuments((prev) => prev.map((d) => (d.id === updated.id ? updated : d)));
+      setActiveVariant('primary');
+      await DBService.saveAcademicDocument(updated);
+      showToast(`Switched format to .${target} (instant, no AI call).`);
+      return;
+    }
+
+    try {
+      const res = await GeminiService.convertStudioV2Format(activeDocument.id, target);
+      if (res.job) {
+        previousJobStatusRef.current[res.job.id] = res.job.status;
+        setStudioJobs((prev) => [res.job, ...prev.filter((j) => j.id !== res.job.id)]);
+      }
+      showToast('Converting format in the background. You will be notified when ready.');
+    } catch (err: any) {
+      showToast(err?.message || 'Could not start format conversion.');
+    }
+  };
 
   // Preview & Export Modal State
   const [showExportModal, setShowExportModal] = useState(false);
@@ -319,18 +512,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
       setShowUpgradeModal(true);
       return;
     }
-    setNewDocTitle('');
-    setNewDocType('assignment');
-    setNewDocSubject('');
-    setNewDocWords(1500);
-    setNewDocCitation('APA');
-    setNewDocFormat('docx');
-    setNewDocOtherFormat('');
-    setNewDocVisualPrefs(DEFAULT_VISUAL_PREFERENCES);
-    setNewDocInstructions('');
-    setNewDocReferences([]);
-    setWizardStep(1);
-    setIsCreatingDoc(true);
+    setV2View('brief');
   };
 
   const handleGenerateOutline = async () => {
@@ -1068,57 +1250,82 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
       </AnimatePresence>
 
       {/* ========================================================= */}
-      {/* VIEW 1: MAIN DASHBOARD & DOCUMENT LIST                    */}
+      {/* VIEW 1: MAIN DASHBOARD, BRIEF, OUTLINE & DOCUMENT LIST    */}
       {/* ========================================================= */}
-      {!activeDocument && (
+      {!activeDocument && v2View === 'brief' && (
+        <StudioBriefForm
+          profile={profile}
+          courses={courses}
+          userFiles={userFiles}
+          initialBrief={v2Brief || undefined}
+          isSubmitting={isDraftingV2Outline}
+          onCancel={() => setV2View('list')}
+          onSubmit={handleV2DraftOutline}
+        />
+      )}
+
+      {!activeDocument && v2View === 'outline' && v2Brief && (
+        <StudioOutlineReview
+          brief={v2Brief}
+          outline={v2Outline}
+          onChangeOutline={setV2Outline}
+          onBackToBrief={() => setV2View('brief')}
+          onGenerate={handleV2StartJob}
+          isStartingJob={isStartingV2Job}
+        />
+      )}
+
+      {!activeDocument && v2View === 'list' && (
         <div className="space-y-6">
           {/* Top Clean Header / Studio Overview */}
           <div className="bg-white dark:bg-slate-900 rounded-xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
               <div className="space-y-1.5 max-w-2xl">
                 <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 rounded-md text-[11px] font-semibold">
-                  <Sparkles size={12} />
                   <span>Academic Studio</span>
                 </div>
                 <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
-                  Academic Planning, Writing &amp; Review Studio
+                  Academic Documents &amp; Presentations
                 </h1>
                 <p className="text-slate-500 text-xs sm:text-sm leading-relaxed">
-                  Formulate tailored academic plans, review and approve outlines before generation, draft section-by-section with genuine source citations, and export formatted Word (.docx) and PDF documents.
+                  Fill in one brief, review your outline, generate the full document in the background, and download in your chosen format.
                 </p>
               </div>
 
               <div className="flex items-center gap-3 shrink-0">
                 <button
                   onClick={handleStartCreation}
-                  className="px-4 py-2.5 bg-blue-600 hover:bg-blue-700 active:bg-blue-800 text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 cursor-pointer shadow-xs"
+                  className="px-4 py-2.5 bg-[#2563EB] hover:bg-[#1746A2] text-white rounded-lg text-xs font-semibold transition-colors flex items-center gap-2 cursor-pointer min-h-[44px]"
                 >
                   <Plus size={16} />
                   <span>New Document</span>
                 </button>
               </div>
             </div>
-
-            {/* Quick Metrics Bar */}
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mt-6 pt-5 border-t border-slate-100 dark:border-slate-800">
-              <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 border border-slate-200/60 dark:border-slate-800">
-                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Active Papers</p>
-                <p className="text-lg font-bold text-slate-900 dark:text-white mt-0.5">{documents.length}</p>
-              </div>
-              <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 border border-slate-200/60 dark:border-slate-800">
-                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Words Written</p>
-                <p className="text-lg font-bold text-blue-600 dark:text-blue-400 mt-0.5">{overallWordCount.toLocaleString()}</p>
-              </div>
-              <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 border border-slate-200/60 dark:border-slate-800">
-                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Document Types</p>
-                <p className="text-lg font-bold text-slate-900 dark:text-white mt-0.5">{DOCUMENT_TYPES.length} formats</p>
-              </div>
-              <div className="bg-slate-50 dark:bg-slate-800/50 rounded-lg p-3 border border-slate-200/60 dark:border-slate-800">
-                <p className="text-[10px] font-semibold text-slate-500 uppercase tracking-wider">Supported Exports</p>
-                <p className="text-lg font-bold text-slate-900 dark:text-white mt-0.5">Word &amp; PDF</p>
-              </div>
-            </div>
           </div>
+
+          {/* Background Jobs Progress Rows */}
+          {studioJobs.length > 0 && (
+            <div className="space-y-2.5">
+              {studioJobs.slice(0, 3).map((job) => {
+                const jobDoc = documents.find((d) => d.id === job.documentId);
+                return (
+                  <StudioJobProgress
+                    key={job.id}
+                    job={job}
+                    documentTitle={jobDoc?.title}
+                    onCancel={handleV2CancelJob}
+                    onResume={handleV2ResumeJob}
+                    onDeleteDocument={handleDeleteDocument}
+                    onOpenDocument={(docId) => {
+                      setActiveVariant('primary');
+                      setActiveDocId(docId);
+                    }}
+                  />
+                );
+              })}
+            </div>
+          )}
 
           {/* Search, Filter & Quick Action Bar */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1482,7 +1689,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               {/* Undo / Redo */}
               <div className="flex items-center bg-slate-50 dark:bg-slate-800 rounded-lg border border-[#E5E7EB] dark:border-slate-700 p-0.5">
                 <button
@@ -1507,34 +1714,120 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                 </button>
               </div>
 
-              {/* Visual Design Customisation Shortcut */}
+              {/* Variant Toggle if converted version exists alongside original */}
+              {(activeDocument.convertedVariants?.slides || activeDocument.convertedVariants?.document) && (
+                <div className="flex items-center border border-[#E5E7EB] dark:border-slate-700 rounded-lg overflow-hidden">
+                  <button
+                    type="button"
+                    onClick={() => setActiveVariant('primary')}
+                    className={`px-3 py-2 text-xs font-medium min-h-[44px] cursor-pointer ${
+                      activeVariant === 'primary'
+                        ? 'bg-[#111827] text-white'
+                        : 'bg-white dark:bg-slate-800 text-[#5B6472]'
+                    }`}
+                  >
+                    Original
+                  </button>
+                  {activeDocument.convertedVariants?.slides && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveVariant('slides')}
+                      className={`px-3 py-2 text-xs font-medium min-h-[44px] cursor-pointer ${
+                        activeVariant === 'slides'
+                          ? 'bg-[#111827] text-white'
+                          : 'bg-white dark:bg-slate-800 text-[#5B6472]'
+                      }`}
+                    >
+                      Slides (.pptx)
+                    </button>
+                  )}
+                  {activeDocument.convertedVariants?.document && (
+                    <button
+                      type="button"
+                      onClick={() => setActiveVariant('document')}
+                      className={`px-3 py-2 text-xs font-medium min-h-[44px] cursor-pointer ${
+                        activeVariant === 'document'
+                          ? 'bg-[#111827] text-white'
+                          : 'bg-white dark:bg-slate-800 text-[#5B6472]'
+                      }`}
+                    >
+                      Document
+                    </button>
+                  )}
+                </div>
+              )}
+
+              {/* Switch Format: Instant Word<->PDF (0 AI calls) or Background Convert */}
+              {(() => {
+                const currentFmt =
+                  activeVariant === 'slides'
+                    ? 'pptx'
+                    : activeVariant === 'document'
+                    ? 'docx'
+                    : activeDocument.fileFormat || (activeDocument.metadata?.preferredFormat as StudioFileFormat) || 'docx';
+                return (
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {currentFmt !== 'pptx' && (
+                      <button
+                        type="button"
+                        onClick={() => handleV2SwitchFormat(currentFmt === 'docx' ? 'pdf' : 'docx')}
+                        className="px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-[#111827] dark:text-white rounded-lg text-xs font-medium min-h-[44px] cursor-pointer"
+                      >
+                        Switch to {currentFmt === 'docx' ? '.pdf' : '.docx'}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() =>
+                        handleV2SwitchFormat(currentFmt === 'pptx' ? 'convert_to_document' : 'convert_to_slides')
+                      }
+                      title="Runs a short background step and keeps the original."
+                      className="px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-[#111827] dark:text-white rounded-lg text-xs font-medium min-h-[44px] cursor-pointer"
+                    >
+                      {currentFmt === 'pptx' ? 'Convert to document' : 'Convert to slides'}
+                    </button>
+                  </div>
+                );
+              })()}
+
+              {/* Single Download Button (no export menu, no sharing) */}
               <button
                 type="button"
-                onClick={() => setShowVisualPrefsModal(true)}
-                className="px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-[#111827] dark:text-white rounded-lg text-xs font-semibold cursor-pointer min-h-[44px]"
-                title="Customize Optional Visual Design"
-              >
-                Design{hasAnyVisualElementEnabled(activeDocument.metadata?.visualPreferences) ? ' • Visuals On' : ''}
-              </button>
-
-              {/* Primary Action Button: Export (Gated with Quiet Upgrade Prompt where excluded) */}
-              <button
-                onClick={() => {
-                  if (!isExportAllowed) {
-                    setShowQuietUpgrade({
-                      feature: 'Export Manuscript',
-                      description: `Exporting formatted Word (.docx), PDF (.pdf), and PowerPoint (.pptx) files is included in the ${getPlanDisplayName('studio')} plan.`
-                    });
-                  } else {
-                    setShowExportModal(true);
-                  }
-                }}
-                className="px-4 py-2 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer shadow-sm min-h-[44px]"
+                onClick={handleV2Download}
+                className="px-4 py-2 bg-[#2563EB] hover:bg-[#1746A2] text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer min-h-[44px]"
               >
                 <Download size={14} />
-                <span>Export</span>
+                <span>
+                  Download .{activeVariant === 'slides' ? 'pptx' : activeVariant === 'document' ? 'docx' : (activeDocument.fileFormat || 'docx')}
+                </span>
               </button>
             </div>
+          </div>
+
+          {/* Active job progress row if this document has a running/queued/cancelled job */}
+          {studioJobs
+            .filter((j) => j.documentId === activeDocument.id && j.status !== 'completed')
+            .slice(0, 1)
+            .map((job) => (
+              <StudioJobProgress
+                key={job.id}
+                job={job}
+                documentTitle={activeDocument.title}
+                onCancel={handleV2CancelJob}
+                onResume={handleV2ResumeJob}
+                onDeleteDocument={handleDeleteDocument}
+                onOpenDocument={(id) => setActiveDocId(id)}
+              />
+            ))}
+
+          {/* Plain source count & integrity notice */}
+          <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-[#5B6472] dark:text-slate-400">
+            <span>
+              {typeof activeDocument.sourceCount === 'number'
+                ? `Found ${activeDocument.sourceCount} verifiable ${activeDocument.sourceCount === 1 ? 'source' : 'sources'}.`
+                : `${activeDocument.references.length} verifiable ${activeDocument.references.length === 1 ? 'source' : 'sources'}.`}
+            </span>
+            <span>{STUDIO_DOWNLOAD_NOTICE}</span>
           </div>
 
           {/* Batch Progress Bar */}

@@ -462,16 +462,39 @@ export interface AIRepetitionPlan {
 
 export type AcademicDocumentType = 
   | 'assignment' 
+  | 'report'
+  | 'project'
   | 'term_paper' 
   | 'essay' 
+  | 'proposal'
   | 'research_proposal' 
   | 'thesis' 
   | 'literature_review' 
   | 'case_study' 
   | 'lab_report' 
-  | 'seminar_paper';
+  | 'seminar_paper'
+  | 'presentation';
 
-export type CitationStyle = 'APA' | 'Harvard' | 'MLA' | 'IEEE';
+export type CitationStyle = 'APA' | 'APA 7' | 'Harvard' | 'MLA' | 'IEEE' | 'Chicago' | 'Vancouver';
+
+export type StudioFileFormat = 'docx' | 'pdf' | 'pptx';
+
+export type StudioDocumentStyle = 'classic_academic' | 'modern_clean';
+
+export type StudioLengthUnit = 'words' | 'pages' | 'slides';
+
+export type StudioOutlineSectionKind =
+  | 'cover'
+  | 'front_matter'
+  | 'toc'
+  | 'list_of_tables'
+  | 'list_of_figures'
+  | 'abstract'
+  | 'body'
+  | 'conclusion'
+  | 'references'
+  | 'appendix'
+  | 'slide';
 
 export type StudioDocumentStatus = 
   | 'planning' 
@@ -488,6 +511,9 @@ export interface StudioOutlineItem {
   description: string;
   rationale?: string;
   targetWords: number;
+  targetSlides?: number;
+  kind?: StudioOutlineSectionKind;
+  plannedVisual?: boolean;
   approved: boolean;
   personalInstructions?: string;
   subsections?: StudioOutlineItem[];
@@ -571,7 +597,8 @@ export interface StudioSection {
   order: number;
   content: string;
   visuals?: StudioVisualBlock[];
-  status: 'empty' | 'generating' | 'drafted' | 'approved';
+  status: 'empty' | 'generating' | 'drafted' | 'approved' | 'needs_attention';
+  needsAttention?: boolean;
   wordCount: number;
   citations: StudioCitation[];
   lastEditedAt: string;
@@ -584,10 +611,108 @@ export interface StudioReference {
   year?: string;
   sourceType: 'pdf' | 'docx' | 'book' | 'journal' | 'website' | 'group_material';
   contentSnippet?: string;
+  abstract?: string;
+  journal?: string;
+  volume?: string;
+  issue?: string;
+  pages?: string;
+  publisher?: string;
   fileName?: string;
   fileUrl?: string;
   doi?: string;
+  url?: string;
+  isWebSource?: boolean;
+  isStudentSource?: boolean;
   verified: boolean;
+}
+
+export interface StudioBrief {
+  title: string;
+  docType: AcademicDocumentType;
+  courseCode: string;
+  courseTitle: string;
+  supervisorName: string;
+  studentName: string;
+  matricNumber: string;
+  department: string;
+  faculty: string;
+  institution: string;
+  date: string;
+  instructions: string;
+  citationStyle: CitationStyle;
+  targetLength: number;
+  lengthUnit: StudioLengthUnit;
+  documentStyle: StudioDocumentStyle;
+  spacing?: '1.5' | 'double';
+  visualsEnabled: boolean;
+  fileFormat: StudioFileFormat;
+  pastedReferences?: string;
+  uploadedMaterialIds?: string[];
+}
+
+export type StudioContentBlock =
+  | { id: string; sectionId: string; type: 'heading'; level: 1 | 2 | 3; text: string; isFrontMatter?: boolean }
+  | { id: string; sectionId: string; type: 'paragraph'; text: string; citationIds?: string[] }
+  | { id: string; sectionId: string; type: 'list'; ordered: boolean; items: string[]; citationIds?: string[] }
+  | { id: string; sectionId: string; type: 'table'; caption: string; headers: string[]; rows: string[][] }
+  | { id: string; sectionId: string; type: 'figure'; caption: string; visual: StudioVisualBlock }
+  | { id: string; sectionId: string; type: 'slide'; title: string; bullets: string[]; speakerNotes?: string; visual?: StudioVisualBlock }
+  | { id: string; sectionId: string; type: 'page_break' };
+
+export type StudioJobStatus =
+  | 'queued'
+  | 'running'
+  | 'completed'
+  | 'completed_with_issues'
+  | 'failed'
+  | 'cancelled';
+
+export type StudioJobKind = 'generate' | 'convert_to_slides' | 'convert_to_document';
+
+export type StudioJobStepType =
+  | 'retrieve_sources'
+  | 'write_section'
+  | 'generate_visual'
+  | 'write_abstract'
+  | 'write_conclusion'
+  | 'cover_and_front_matter'
+  | 'final_consistency_pass'
+  | 'convert_content';
+
+export interface StudioJobStep {
+  id: string;
+  index: number;
+  type: StudioJobStepType;
+  label: string;
+  outlineItemId?: string;
+  status: 'pending' | 'running' | 'completed' | 'needs_attention' | 'skipped' | 'failed';
+  attempts: number;
+  error?: string;
+}
+
+export interface StudioJob {
+  id: string;
+  userId: string;
+  documentId: string;
+  jobKind: StudioJobKind;
+  status: StudioJobStatus;
+  plan: StudioJobStep[];
+  currentStep: number;
+  totalSteps: number;
+  progress: number;
+  error?: string | null;
+  cancelRequested: boolean;
+  leaseUntil?: string | null;
+  attempts: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StudioConvertedVariant {
+  fileFormat: StudioFileFormat;
+  sections: StudioSection[];
+  contentBlocks: StudioContentBlock[];
+  updatedAt: string;
 }
 
 export interface StudioReviewSuggestion {
@@ -647,6 +772,11 @@ export interface AcademicDocument {
   sections: StudioSection[];
   references: StudioReference[];
   metadata: AcademicDocumentMetadata;
+  brief?: StudioBrief;
+  fileFormat?: StudioFileFormat;
+  contentBlocks?: StudioContentBlock[];
+  convertedVariants?: Partial<Record<'document' | 'slides', StudioConvertedVariant>>;
+  sourceCount?: number;
   createdAt: string;
   updatedAt: string;
   version: number;

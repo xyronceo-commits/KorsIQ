@@ -1,6 +1,7 @@
 import JSZip from 'jszip';
 import { AcademicDocument } from '../types';
 import { renderVisualBlockToPng } from './visualRenderer';
+import { formatReferenceEntry, inferSectionKind, STUDIO_DOWNLOAD_NOTICE } from '../lib/studioV2';
 
 function escapeXml(unsafe: string): string {
   return (unsafe || '')
@@ -27,10 +28,13 @@ function dataUrlToUint8Array(dataUrl: string): Uint8Array {
  */
 export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
   const zip = new JSZip();
-  const designStyle = doc.metadata?.visualPreferences?.designStyle || 'classic_academic';
+  const designStyle = doc.brief?.documentStyle === 'modern_clean'
+    ? 'modern_professional'
+    : (doc.metadata?.visualPreferences?.designStyle || 'classic_academic');
   const isClassic = designStyle === 'classic_academic';
   const bodyFont = isClassic ? 'Times New Roman' : 'Calibri';
   const headingColor = isClassic ? '111827' : '1E3A8A';
+  const lineSpacingVal = doc.brief?.spacing === 'double' ? '480' : '360';
 
   const mediaRels: Array<{ rId: string; target: string }> = [];
   let mediaCounter = 0;
@@ -60,7 +64,7 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
     </w:rPrDefault>
     <w:pPrDefault>
       <w:pPr>
-        <w:spacing w:after="160" w:line="360" w:lineRule="auto"/>
+        <w:spacing w:after="160" w:line="${lineSpacingVal}" w:lineRule="auto"/>
       </w:pPr>
     </w:pPrDefault>
   </w:docDefaults>
@@ -112,14 +116,15 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
   let bodyXml = '';
 
   const meta = doc.metadata || {};
-  const institution = meta.institution || 'INSTITUTION OF HIGHER LEARNING';
-  const faculty = meta.faculty || meta.department || 'FACULTY OF ACADEMIC STUDIES';
-  const studentName = meta.studentName || 'STUDENT RESEARCHER';
-  const studentId = meta.studentId || '';
-  const courseCode = meta.courseCode || doc.subject || '';
-  const courseTitle = meta.courseTitle || doc.title || '';
-  const lecturerName = meta.lecturerName || '';
-  const submissionDate = meta.submissionDate || new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const brief = doc.brief;
+  const institution = brief?.institution || meta.institution || 'INSTITUTION OF HIGHER LEARNING';
+  const faculty = brief?.faculty || brief?.department || meta.faculty || meta.department || 'FACULTY OF ACADEMIC STUDIES';
+  const studentName = brief?.studentName || meta.studentName || 'STUDENT RESEARCHER';
+  const studentId = brief?.matricNumber || meta.studentId || '';
+  const courseCode = brief?.courseCode || meta.courseCode || doc.subject || '';
+  const courseTitle = brief?.courseTitle || meta.courseTitle || doc.title || '';
+  const lecturerName = brief?.supervisorName || meta.lecturerName || '';
+  const submissionDate = brief?.date || meta.submissionDate || new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
 
   // COVER / TITLE PAGE
   if (meta.includeCoverPage !== false) {
@@ -182,25 +187,55 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
     `;
   }
 
-  // TABLE OF CONTENTS (if enabled)
+  // TABLE OF CONTENTS (Real Word TOC field + outline entries)
   if (meta.includeTableOfContents !== false && doc.outline && doc.outline.length > 0) {
     bodyXml += `
       <w:p>
-        <w:pPr><w:jc w:val="center"/><w:spacing w:before="360" w:after="360"/></w:pPr>
+        <w:pPr><w:jc w:val="center"/><w:spacing w:before="360" w:after="240"/></w:pPr>
         <w:r><w:rPr><w:b/><w:sz w:val="32"/></w:rPr><w:t>TABLE OF CONTENTS</w:t></w:r>
+      </w:p>
+      <w:p>
+        <w:fldSimple w:instr="TOC \\o &quot;1-3&quot; \\h \\z \\u">
+          <w:r><w:t>Right-click and choose Update Field in Word to refresh page numbers.</w:t></w:r>
+        </w:fldSimple>
       </w:p>
     `;
 
-    doc.outline.forEach((item, index) => {
+    doc.outline.forEach((item) => {
+      const kind = inferSectionKind(item);
+      if (kind === 'cover' || kind === 'toc') return;
       const indent = item.level === 1 ? '0' : item.level === 2 ? '360' : '720';
       const weight = item.level === 1 ? '<w:b/>' : '';
       bodyXml += `
         <w:p>
-          <w:pPr><w:ind w:left="${indent}"/><w:spacing w:after="80"/></w:pPr>
-          <w:r><w:rPr>${weight}<w:sz w:val="22"/></w:rPr><w:t>${item.level === 1 ? `CHAPTER ${index + 1}: ` : ''}${escapeXml(item.title)}</w:t></w:r>
+          <w:pPr><w:ind w:left="${indent}"/><w:spacing w:after="60"/></w:pPr>
+          <w:r><w:rPr>${weight}<w:sz w:val="22"/></w:rPr><w:t>${escapeXml(item.title)}</w:t></w:r>
         </w:p>
       `;
     });
+
+    // Lists of Tables & Figures built from captions
+    const tableCaptions: string[] = [];
+    const figureCaptions: string[] = [];
+    (doc.sections || []).forEach((sec) => {
+      (sec.visuals || []).forEach((vis) => {
+        const cap = vis.caption || vis.title;
+        if (vis.kind === 'comparison_table') tableCaptions.push(cap);
+        else figureCaptions.push(cap);
+      });
+    });
+    if (tableCaptions.length > 0) {
+      bodyXml += `
+        <w:p><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="26"/></w:rPr><w:t>LIST OF TABLES</w:t></w:r></w:p>
+        ${tableCaptions.map((c, idx) => `<w:p><w:pPr><w:spacing w:after="60"/></w:pPr><w:r><w:rPr><w:sz w:val="22"/></w:rPr><w:t>Table ${idx + 1}: ${escapeXml(c)}</w:t></w:r></w:p>`).join('')}
+      `;
+    }
+    if (figureCaptions.length > 0) {
+      bodyXml += `
+        <w:p><w:pPr><w:spacing w:before="240" w:after="120"/></w:pPr><w:r><w:rPr><w:b/><w:sz w:val="26"/></w:rPr><w:t>LIST OF FIGURES</w:t></w:r></w:p>
+        ${figureCaptions.map((c, idx) => `<w:p><w:pPr><w:spacing w:after="60"/></w:pPr><w:r><w:rPr><w:sz w:val="22"/></w:rPr><w:t>Figure ${idx + 1}: ${escapeXml(c)}</w:t></w:r></w:p>`).join('')}
+      `;
+    }
 
     bodyXml += `<w:p><w:r><w:br w:type="page"/></w:r></w:p>`;
   }
@@ -411,20 +446,14 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
       </w:p>
     `;
 
-    doc.references.forEach(ref => {
-      let refText = '';
-      if (doc.citationStyle === 'IEEE') {
-        refText = `${ref.authors}, "${ref.title}", ${ref.year ? ref.year + '.' : ''} ${ref.doi ? `DOI: ${ref.doi}` : ''}`;
-      } else {
-        // APA / Harvard default
-        refText = `${ref.authors} (${ref.year || 'n.d.'}). ${ref.title}. ${ref.doi ? `https://doi.org/${ref.doi}` : ''}`;
-      }
+    doc.references.forEach((ref, rIdx) => {
+      const refText = formatReferenceEntry(ref, doc.citationStyle || 'APA 7', rIdx + 1);
 
       bodyXml += `
         <w:p>
           <w:pPr>
             <w:ind w:left="720" w:hanging="720"/>
-            <w:spacing w:after="160" w:line="360" w:lineRule="auto"/>
+            <w:spacing w:after="160" w:line="${lineSpacingVal}" w:lineRule="auto"/>
           </w:pPr>
           <w:r>
             <w:rPr><w:sz w:val="22"/></w:rPr>
@@ -434,6 +463,13 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
       `;
     });
   }
+
+  bodyXml += `
+    <w:p>
+      <w:pPr><w:spacing w:before="360"/><w:jc w:val="center"/></w:pPr>
+      <w:r><w:rPr><w:i/><w:color w:val="64748B"/><w:sz w:val="18"/></w:rPr><w:t>${escapeXml(STUDIO_DOWNLOAD_NOTICE)}</w:t></w:r>
+    </w:p>
+  `;
 
   // 5b. [Content_Types].xml & word/_rels/document.xml.rels (include PNGs only if visuals were embedded)
   zip.file(
