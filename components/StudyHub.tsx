@@ -10,6 +10,7 @@ import { getCurrentUserId, getAccessToken } from '../lib/supabase';
 import ReactMarkdown from 'react-markdown';
 import { RecentFiles } from './RecentFiles';
 import { StudyHubAIChat } from './StudyHubAIChat';
+import { ResourceSearch } from './ResourceSearch';
 
 // Component for individual flashcards in Grid View
 const FlashcardItem: React.FC<{ card: Flashcard; index: number }> = ({ card, index }) => {
@@ -141,6 +142,7 @@ const StudyHub: React.FC<StudyHubProps> = ({
   // Study Hub Generation History State
   const [hubHistory, setHubHistory] = useState<StudyHubHistoryItem[]>([]);
   const [showToolHistory, setShowToolHistory] = useState(false);
+  const [isSearchExpanded, setIsSearchExpanded] = useState(false);
 
   const stopPodcastPlayback = () => {
     podcastPlaybackTokenRef.current += 1;
@@ -1058,8 +1060,8 @@ const StudyHub: React.FC<StudyHubProps> = ({
     return (
       <div className="space-y-6 max-w-5xl mx-auto pb-16">
         {/* Header with Ask KorsIQ AI entry */}
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 border-b border-slate-200 dark:border-slate-800 pb-5">
-          <div>
+        <div className="flex flex-wrap items-center justify-between gap-3 sm:gap-4 border-b border-slate-200 dark:border-slate-800 pb-5">
+          <div className="mr-auto">
             <div className="flex items-center gap-2 mb-1">
               <span className="px-2 py-0.5 bg-blue-50 dark:bg-blue-950 text-blue-700 dark:text-blue-300 rounded text-[10px] font-bold uppercase tracking-widest border border-blue-100 dark:border-blue-900">
                 Study Hub
@@ -1075,10 +1077,19 @@ const StudyHub: React.FC<StudyHubProps> = ({
             </p>
           </div>
 
+          <div className={isSearchExpanded ? 'order-3 w-full' : 'order-2'}>
+            <ResourceSearch
+              courses={courses}
+              openActionLabel="Open in Hub"
+              onOpenFile={handleSelectRecentFile}
+              onExpandedChange={setIsSearchExpanded}
+            />
+          </div>
+
           <button
             type="button"
             onClick={() => setLandingView(landingView === 'ai' ? 'courses' : 'ai')}
-            className="inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg text-xs sm:text-sm font-semibold min-h-[44px] transition-colors cursor-pointer shrink-0 shadow-xs"
+            className={`${isSearchExpanded ? 'order-2' : 'order-3'} inline-flex items-center justify-center gap-2 px-4 py-2.5 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg text-xs sm:text-sm font-semibold min-h-[44px] transition-colors cursor-pointer shrink-0 shadow-xs`}
           >
             <MessageSquare size={16} />
             <span>{landingView === 'ai' ? 'View courses' : 'Ask KorsIQ AI'}</span>
@@ -1207,6 +1218,15 @@ const StudyHub: React.FC<StudyHubProps> = ({
         </div>
         
         <div className="flex flex-wrap gap-2.5 w-full xl:w-auto items-center">
+          <div className={isSearchExpanded ? 'order-last w-full' : ''}>
+            <ResourceSearch
+              courses={courses}
+              openActionLabel="Open in Hub"
+              onOpenFile={handleSelectRecentFile}
+              onExpandedChange={setIsSearchExpanded}
+            />
+          </div>
+
           <button
             onClick={() => {
               setActiveCourseId('');
