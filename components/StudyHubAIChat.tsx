@@ -10,13 +10,17 @@ import {
   Loader2,
   FileText,
   ChevronLeft,
-  History
+  History,
+  Copy,
+  RotateCcw,
+  Square
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import { Course, StudyHubData, UserProfile } from '../types';
 import { GeminiService, getHeaders } from '../services/gemini';
 import { supabase, getCurrentUserId } from '../lib/supabase';
 import KorsIQLogo from './KorsIQLogo';
+import { AILiveStatus, CircularThinkingIndicator } from './AILiveStatus';
 
 export interface AIConversation {
   id: string;
@@ -76,6 +80,10 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
   const [isLoadingConversations, setIsLoadingConversations] = useState(false);
   const [isLoadingMessages, setIsLoadingMessages] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [streamStage, setStreamStage] = useState<string>('Understanding your request...');
+  const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
+  const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
+  const streamAbortRef = useRef<AbortController | null>(null);
   const [inputVal, setInputVal] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
@@ -253,14 +261,25 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
     }
   };
 
-  const handleSendMessage = async (e?: React.FormEvent) => {
-    if (e) e.preventDefault();
-    const promptText = inputVal.trim();
-    if (!promptText || isSending) return;
+  const handleStopStreaming = () => {
+    streamAbortRef.current?.abort();
+    streamAbortRef.current = null;
+    setIsSending(false);
+    setStreamingMessageId(null);
+  };
 
-    setInputVal('');
+  const handleCopyMessage = async (msgId: string, content: string) => {
+    try {
+      await navigator.clipboard.writeText(content);
+      setCopiedMsgId(msgId);
+      window.setTimeout(() => setCopiedMsgId((prev) => (prev === msgId ? null : prev)), 2000);
+    } catch {}
+  };
+
+  const runStreamingPrompt = async (promptText: string, baseMessages: AIMessage[]) => {
     setErrorMsg(null);
     setIsSending(true);
+    setStreamStage('Understanding your request...');
 
     const optimisticUserMsg: AIMessage = {
       id: `temp-user-${Date.now()}`,
@@ -270,32 +289,66 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
       created_at: new Date().toISOString()
     };
 
-    const nextHistory = [...messages, optimisticUserMsg];
-    setMessages(nextHistory);
+    const streamingAssistantId = `temp-ai-stream-${Date.now()}`;
+    const streamingAssistantMsg: AIMessage = {
+      id: streamingAssistantId,
+      conversation_id: activeConversationId || 'pending',
+      role: 'assistant',
+      content: '',
+      created_at: new Date().toISOString()
+    };
+
+    setStreamingMessageId(streamingAssistantId);
+    const nextHistory = [...baseMessages, optimisticUserMsg];
+    setMessages([...nextHistory, streamingAssistantMsg]);
+
+    const controller = new AbortController();
+    streamAbortRef.current = controller;
 
     try {
       const courseContext = activeCourse
         ? `[${activeCourse.code}] ${activeCourse.title}`
         : '';
 
-      const reply = await GeminiService.scolarisChat(
-        nextHistory.map(m => ({ role: m.role, content: m.content })),
-        courseContext,
-        fileContent,
-        undefined,
+      let finalDoneData: any = null;
+      let accumulatedText = '';
+
+      await GeminiService.scolarisChatStream(
         {
+          messages: nextHistory.map((m) => ({ role: m.role, content: m.content })),
+          message: promptText,
           conversationId: activeConversationId,
           courseId: scopeCourseId,
-          message: promptText
+          courseContext,
+          fileContent,
+        },
+        {
+          signal: controller.signal,
+          onStage: (s) => {
+            if (s?.label) setStreamStage(s.label);
+          },
+          onToken: (token) => {
+            accumulatedText += token;
+            setMessages((prev) =>
+              prev.map((m) =>
+                m.id === streamingAssistantId ? { ...m, content: m.content + token } : m
+              )
+            );
+          },
+          onDone: (data) => {
+            finalDoneData = data;
+          },
         }
       );
 
-      const aiText = reply?.text || 'I could not generate a response. Please try again.';
-      let resolvedConv: AIConversation | null = reply?.conversation || null;
-      let savedUser: AIMessage | null = reply?.userMessage || null;
-      let savedAssistant: AIMessage | null = reply?.assistantMessage || null;
+      if (controller.signal.aborted) return;
 
-      // Client-side RLS persistence fallback if server did not write (e.g. local dev without service role key)
+      const aiText = finalDoneData?.text || accumulatedText || 'I could not generate a response. Please try again.';
+      let resolvedConv: AIConversation | null = finalDoneData?.conversation || null;
+      let savedUser: AIMessage | null = finalDoneData?.userMessage || null;
+      let savedAssistant: AIMessage | null = finalDoneData?.assistantMessage || null;
+
+      // Client-side RLS persistence fallback if server did not write
       if (!resolvedConv && userId) {
         const autoTitle = promptText.replace(/\s+/g, ' ').slice(0, 60) || 'New conversation';
         if (activeConversationId) {
@@ -338,8 +391,8 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
       const finalConvId = resolvedConv?.id || activeConversationId || `local-${Date.now()}`;
       if (resolvedConv) {
         setActiveConversationId(resolvedConv.id);
-        setConversations(prev => {
-          const others = prev.filter(c => c.id !== resolvedConv!.id);
+        setConversations((prev) => {
+          const others = prev.filter((c) => c.id !== resolvedConv!.id);
           return [resolvedConv!, ...others];
         });
       }
@@ -356,16 +409,44 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
         created_at: new Date().toISOString()
       };
 
-      setMessages(prev => [
-        ...prev.filter(m => m.id !== optimisticUserMsg.id),
-        finalUserMsg,
-        finalAssistantMsg
-      ]);
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === optimisticUserMsg.id
+            ? finalUserMsg
+            : m.id === streamingAssistantId
+            ? finalAssistantMsg
+            : m
+        )
+      );
     } catch (err: any) {
+      if (controller.signal.aborted || err?.name === 'AbortError') return;
+      setMessages((prev) => prev.filter((m) => m.id !== streamingAssistantId));
       setErrorMsg(err?.message || 'Unable to reach KorsIQ AI right now.');
     } finally {
+      if (streamAbortRef.current === controller) {
+        streamAbortRef.current = null;
+      }
       setIsSending(false);
+      setStreamingMessageId(null);
     }
+  };
+
+  const handleSendMessage = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
+    const promptText = inputVal.trim();
+    if (!promptText || isSending) return;
+    setInputVal('');
+    await runStreamingPrompt(promptText, messages);
+  };
+
+  const handleRegenerate = async (assistantIndex: number) => {
+    if (isSending) return;
+    const precedingUser = [...messages.slice(0, assistantIndex)]
+      .reverse()
+      .find((m) => m.role === 'user');
+    if (!precedingUser) return;
+    const trimmedHistory = messages.slice(0, messages.indexOf(precedingUser));
+    await runStreamingPrompt(precedingUser.content, trimmedHistory);
   };
 
   const activeConversation = conversations.find(c => c.id === activeConversationId) || null;
@@ -615,25 +696,64 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
                 </button>
               </div>
             ) : (
-              messages.map(msg => {
+              messages.map((msg, msgIdx) => {
                 const isUser = msg.role === 'user';
+                const isCurrentlyStreaming = msg.id === streamingMessageId;
                 return (
                   <div
                     key={msg.id}
                     className={`flex ${isUser ? 'justify-end' : 'justify-start'}`}
                   >
                     <div
-                      className={`max-w-[85%] rounded-xl px-4 py-3 text-xs sm:text-sm leading-relaxed ${
+                      className={`max-w-[90%] sm:max-w-[85%] rounded-lg px-4 py-3 text-xs sm:text-sm leading-relaxed ${
                         isUser
                           ? 'bg-[#2563EB] text-white'
-                          : 'bg-slate-50 dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 text-[#111827] dark:text-slate-100'
+                          : 'bg-white dark:bg-slate-800/70 border border-[#E5E7EB] dark:border-slate-700 text-[#111827] dark:text-slate-100'
                       }`}
                     >
                       {isUser ? (
                         <p className="whitespace-pre-wrap">{msg.content}</p>
                       ) : (
-                        <div className="prose prose-xs sm:prose-sm dark:prose-invert max-w-none">
-                          <ReactMarkdown>{msg.content}</ReactMarkdown>
+                        <div className="space-y-2.5">
+                          {isCurrentlyStreaming && (
+                            <AILiveStatus
+                              compact
+                              state="active"
+                              statusText={msg.content ? 'Writing response...' : streamStage}
+                            />
+                          )}
+                          {msg.content && (
+                            <div className="prose prose-xs sm:prose-sm dark:prose-invert max-w-none">
+                              <ReactMarkdown>{msg.content}</ReactMarkdown>
+                            </div>
+                          )}
+                          {!isCurrentlyStreaming && msg.content && (
+                            <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#E5E7EB] dark:border-slate-700/70">
+                              <div className="inline-flex items-center gap-1.5 text-[11px] text-[#5B6472] dark:text-slate-400">
+                                <CircularThinkingIndicator state="completed" size="sm" />
+                                <span>Completed</span>
+                              </div>
+                              <div className="flex items-center gap-1">
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyMessage(msg.id, msg.content)}
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-[#5B6472] hover:text-[#111827] dark:text-slate-300 dark:hover:text-white rounded hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer"
+                                >
+                                  {copiedMsgId === msg.id ? <Check size={12} /> : <Copy size={12} />}
+                                  <span>{copiedMsgId === msg.id ? 'Copied' : 'Copy'}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleRegenerate(msgIdx)}
+                                  disabled={isSending}
+                                  className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-[#5B6472] hover:text-[#111827] dark:text-slate-300 dark:hover:text-white rounded hover:bg-slate-100 dark:hover:bg-slate-700 disabled:opacity-40 cursor-pointer"
+                                >
+                                  <RotateCcw size={12} />
+                                  <span>Regenerate</span>
+                                </button>
+                              </div>
+                            </div>
+                          )}
                         </div>
                       )}
                     </div>
@@ -644,10 +764,14 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
 
             {isSending && (
               <div className="flex justify-start">
-                <div className="bg-slate-50 dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 rounded-xl px-4 py-3 text-xs text-[#5B6472] dark:text-slate-300 flex items-center gap-2">
-                  <Loader2 size={14} className="animate-spin text-[#2563EB]" />
-                  <span>Thinking...</span>
-                </div>
+                <button
+                  type="button"
+                  onClick={handleStopStreaming}
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 border border-[#E5E7EB] dark:border-slate-700 bg-white dark:bg-slate-900 rounded-lg text-xs font-medium text-[#111827] dark:text-slate-200 hover:bg-slate-50 cursor-pointer"
+                >
+                  <Square size={12} />
+                  <span>Stop generating</span>
+                </button>
               </div>
             )}
 

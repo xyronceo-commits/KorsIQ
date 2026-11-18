@@ -11,6 +11,7 @@ import ReactMarkdown from 'react-markdown';
 import { RecentFiles } from './RecentFiles';
 import { StudyHubAIChat } from './StudyHubAIChat';
 import { ResourceSearch } from './ResourceSearch';
+import { AILiveStatus, AILiveStage } from './AILiveStatus';
 
 // Component for individual flashcards in Grid View
 const FlashcardItem: React.FC<{ card: Flashcard; index: number }> = ({ card, index }) => {
@@ -116,6 +117,8 @@ const StudyHub: React.FC<StudyHubProps> = ({
   }, [activeTool]);
   const [landingView, setLandingView] = useState<'courses' | 'ai'>('courses');
   const [loading, setLoading] = useState(false);
+  const [toolStages, setToolStages] = useState<AILiveStage[]>([]);
+  const [toolStatusText, setToolStatusText] = useState('Analysing your study material...');
   const [insufficientCreditsNotice, setInsufficientCreditsNotice] = useState<{
     required: number;
     balance: number;
@@ -952,9 +955,28 @@ const StudyHub: React.FC<StudyHubProps> = ({
     }
 
     setInsufficientCreditsNotice(null);
+    const labelMap: Record<string, string> = {
+      summary: 'Structuring executive summary...',
+      flashcards: 'Building active recall flashcards...',
+      quiz: 'Drafting practice quiz questions...',
+      test: 'Preparing timed practice test...',
+    };
+    setToolStatusText('Analysing your study material...');
+    setToolStages([
+      { id: 'read', label: 'Analysing your study material', status: 'completed' },
+      { id: 'gen', label: labelMap[type] || 'Generating study content', status: 'active' },
+      { id: 'save', label: 'Saving to Study Hub', status: 'pending' },
+    ]);
     setLoading(true);
     try {
+      setToolStatusText(labelMap[type] || 'Generating study content...');
       const data = await GeminiService.generateStudyMaterials(fileContent, type);
+      setToolStatusText('Saving to Study Hub...');
+      setToolStages([
+        { id: 'read', label: 'Analysing your study material', status: 'completed' },
+        { id: 'gen', label: labelMap[type] || 'Generating study content', status: 'completed' },
+        { id: 'save', label: 'Saving to Study Hub', status: 'active' },
+      ]);
       const hubField = type === 'quiz' ? 'quizzes' : (type === 'test' ? 'tests' : type);
       const updatedHub = { ...activeHub, [hubField]: data } as StudyHubData;
       setHubs({ ...hubs, [activeCourseId]: updatedHub });
@@ -984,9 +1006,21 @@ const StudyHub: React.FC<StudyHubProps> = ({
 
     setInsufficientCreditsNotice(null);
     setPodcastAudioNotice(null);
+    setToolStatusText('Scripting audio dialogue...');
+    setToolStages([
+      { id: 'read', label: 'Reviewing course material', status: 'completed' },
+      { id: 'gen', label: 'Scripting audio dialogue', status: 'active' },
+      { id: 'save', label: 'Saving podcast to Study Hub', status: 'pending' },
+    ]);
     setLoading(true);
     try {
       const res = await GeminiService.generatePodcast(source);
+      setToolStatusText('Saving podcast to Study Hub...');
+      setToolStages([
+        { id: 'read', label: 'Reviewing course material', status: 'completed' },
+        { id: 'gen', label: 'Scripting audio dialogue', status: 'completed' },
+        { id: 'save', label: 'Saving podcast to Study Hub', status: 'active' },
+      ]);
       stopPodcastPlayback();
       const updatedHub = {
         ...activeHub,
@@ -1468,16 +1502,15 @@ const StudyHub: React.FC<StudyHubProps> = ({
           )}
 
           {loading && (
-            <div className="absolute inset-0 bg-white/95 z-50 flex flex-col items-center justify-center text-center p-6 animate-in fade-in duration-200 rounded-xl">
-               <div className="relative w-16 h-16 mb-6">
-                 <div className="absolute inset-0 border-2 border-slate-100 rounded-full"></div>
-                 <div className="absolute inset-0 border-2 border-blue-600 border-t-transparent rounded-full animate-spin"></div>
-                 <div className="absolute inset-2 bg-blue-50 rounded-full flex items-center justify-center text-blue-600">
-                   {ICONS.Sparkles}
-                 </div>
-               </div>
-              <h2 className="text-base font-semibold mb-1 text-slate-900">Synthesizing Course Materials</h2>
-              <p className="text-slate-500 max-w-sm text-xs">Transforming your syllabus into structured summaries, cards, and quizzes...</p>
+            <div className="absolute inset-0 bg-white/95 dark:bg-slate-900/95 z-50 flex items-center justify-center p-6 rounded-xl">
+              <div className="w-full max-w-md">
+                <AILiveStatus
+                  title="KorsIQ is working"
+                  statusText={toolStatusText}
+                  state="active"
+                  stages={toolStages}
+                />
+              </div>
             </div>
           )}
 

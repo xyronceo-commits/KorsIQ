@@ -13,6 +13,7 @@ import {
 } from '../types';
 import { GeminiService } from '../services/gemini';
 import { DBService } from '../services/db';
+import { AILiveStatus } from './AILiveStatus';
 
 interface CGPACalculatorProps {
   profile?: UserProfile | null;
@@ -555,14 +556,33 @@ export const CGPACalculator: React.FC<CGPACalculatorProps> = ({
         difficultCourses: academicConfig.difficultCourses
       };
 
-      const res = await GeminiService.sendAcademicChat([...chatMessages, userMsg], academicContext);
-      const aiReply = {
-        id: `reply-${Date.now()}`,
-        sender: 'assistant' as const,
-        text: res.text || "I recommend allocating focused 25-minute Pomodoro intervals for your highest-credit courses.",
-        timestamp: Date.now()
-      };
-      setChatMessages(prev => [...prev, aiReply]);
+      const replyId = `reply-${Date.now()}`;
+      setChatMessages(prev => [
+        ...prev,
+        { id: replyId, sender: 'assistant' as const, text: '', timestamp: Date.now() }
+      ]);
+
+      try {
+        await GeminiService.sendAcademicChatStream(
+          { messages: [...chatMessages, userMsg], academicContext },
+          {
+            onToken: (token) => {
+              setChatMessages(prev =>
+                prev.map(m => (m.id === replyId ? { ...m, text: m.text + token } : m))
+              );
+            },
+          }
+        );
+      } catch {
+        const res = await GeminiService.sendAcademicChat([...chatMessages, userMsg], academicContext);
+        setChatMessages(prev =>
+          prev.map(m =>
+            m.id === replyId
+              ? { ...m, text: res.text || 'I recommend allocating focused study intervals for your highest-credit courses.' }
+              : m
+          )
+        );
+      }
     } catch (err) {
       console.error('handleSendChat error:', err);
     } finally {
@@ -1527,9 +1547,8 @@ export const CGPACalculator: React.FC<CGPACalculatorProps> = ({
               ))}
               {isChatThinking && (
                 <div className="flex justify-start">
-                  <div className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 text-xs flex items-center gap-2 text-slate-500">
-                    <Loader2 size={13} className="animate-spin text-blue-600" />
-                    <span>Evaluating academic records...</span>
+                  <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg p-3">
+                    <AILiveStatus compact state="active" statusText="Analysing your academic profile..." />
                   </div>
                 </div>
               )}

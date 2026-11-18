@@ -15,6 +15,7 @@
     "@aws-sdk/s3-request-presigner": "^3.1050.0",
     "@google/genai": "^1.52.0",
     "@supabase/supabase-js": "^2.118.0",
+    "@vercel/functions": "^3.11.3",
     "cors": "^2.8.6",
     "express": "^5.2.1",
     "jspdf": "^4.2.1",
