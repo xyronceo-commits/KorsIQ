@@ -21,7 +21,7 @@ import Auth, { type AuthMode } from './components/Auth';
 import type { Session } from '@supabase/supabase-js';
 import { supabase, toAuthUser, setCurrentUserId, getAccessToken, type AuthUser } from './lib/supabase';
 import { DBService } from './services/db';
-import { cleanupLegacyApiKeyStorage } from './services/gemini';
+import { cleanupLegacyApiKeyStorage, GeminiService } from './services/gemini';
 import KorsIQLogo from './components/KorsIQLogo';
 import StudyPlannerView from './components/StudyPlannerView';
 import ResourcesView from './components/ResourcesView';
@@ -277,6 +277,12 @@ const App: React.FC = () => {
     return () => {
       cancelled = true;
     };
+  }, [authUser?.uid]);
+
+  // Re-kick any stalled Academic Studio v2 background jobs when the app loads
+  useEffect(() => {
+    if (!authUser?.uid) return;
+    GeminiService.reKickStudioV2Jobs().catch(() => {});
   }, [authUser?.uid]);
 
   // Update Page Title and Robots Metadata based on Active State
@@ -938,6 +944,8 @@ const App: React.FC = () => {
         return <AcademicStudio 
           userId={authUser.uid} 
           profile={profile} 
+          courses={courses}
+          addNotification={addNotification}
           setProfile={handleSaveProfile} 
           onNavigateTab={(tab) => setActiveTab(tab as AppState)} 
         />;

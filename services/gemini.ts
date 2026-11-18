@@ -578,5 +578,75 @@ export const GeminiService = {
       headers: await getHeaders(),
       body: JSON.stringify(payload)
     }, 'Failed to rewrite text.');
-  }
+  },
+
+  // ==========================================
+  // ACADEMIC STUDIO V2: BRIEF -> OUTLINE -> BACKGROUND JOB ENGINE
+  // ==========================================
+
+  async generateStudioV2Outline(brief: any): Promise<{ success: boolean; outline: any[] }> {
+    return await safeFetchJson('/api/studio/v2/outline', {
+      method: 'POST',
+      headers: await getHeaders(),
+      body: JSON.stringify({ brief }),
+    }, 'Failed to draft document outline.');
+  },
+
+  async createStudioV2Job(payload: { brief: any; outline: any[]; documentId?: string }): Promise<{
+    success: boolean;
+    job: any;
+    documentId: string;
+  }> {
+    return await safeFetchJson('/api/studio/v2/jobs', {
+      method: 'POST',
+      headers: await getHeaders(),
+      body: JSON.stringify(payload),
+    }, 'Failed to start generation job.');
+  },
+
+  async getStudioV2Jobs(): Promise<{ success: boolean; jobs: any[] }> {
+    return await safeFetchJson('/api/studio/v2/jobs', {
+      method: 'GET',
+      headers: await getHeaders(),
+    }, 'Failed to load generation jobs.');
+  },
+
+  async getStudioV2Job(jobId: string): Promise<{ success: boolean; job: any; document?: any }> {
+    return await safeFetchJson(`/api/studio/v2/jobs/${encodeURIComponent(jobId)}`, {
+      method: 'GET',
+      headers: await getHeaders(),
+    }, 'Failed to load job status.');
+  },
+
+  async cancelStudioV2Job(jobId: string): Promise<{ success: boolean; job: any }> {
+    return await safeFetchJson(`/api/studio/v2/jobs/${encodeURIComponent(jobId)}/cancel`, {
+      method: 'POST',
+      headers: await getHeaders(),
+    }, 'Failed to cancel generation.');
+  },
+
+  async resumeStudioV2Job(jobId: string): Promise<{ success: boolean; job: any }> {
+    return await safeFetchJson(`/api/studio/v2/jobs/${encodeURIComponent(jobId)}/resume`, {
+      method: 'POST',
+      headers: await getHeaders(),
+    }, 'Failed to resume generation.');
+  },
+
+  async reKickStudioV2Jobs(): Promise<{ success: boolean; kicked: number }> {
+    return await safeFetchJson('/api/studio/v2/jobs/re-kick', {
+      method: 'POST',
+      headers: await getHeaders(),
+    }, 'Failed to check stalled jobs.');
+  },
+
+  async convertStudioV2Format(
+    documentId: string,
+    targetKind: 'convert_to_slides' | 'convert_to_document'
+  ): Promise<{ success: boolean; job: any }> {
+    return await safeFetchJson('/api/studio/v2/convert', {
+      method: 'POST',
+      headers: await getHeaders(),
+      body: JSON.stringify({ documentId, targetKind }),
+    }, 'Failed to start format conversion.');
+  },
 };

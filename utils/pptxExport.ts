@@ -1,6 +1,7 @@
 import PptxGenJS from 'pptxgenjs';
 import { AcademicDocument } from '../types';
 import { renderVisualBlockToPng } from './visualRenderer';
+import { formatReferenceEntry, STUDIO_DOWNLOAD_NOTICE } from '../lib/studioV2';
 
 function cleanText(raw: string): string {
   return raw
@@ -257,23 +258,32 @@ export async function generatePptxBlob(doc: AcademicDocument): Promise<Blob> {
       });
 
       slide.addText(
-        slice.map((ref) => ({
-          text: [ref.authors, ref.year ? `(${ref.year})` : '', ref.title, ref.doi || ref.fileName]
-            .filter(Boolean)
-            .join('. '),
+        slice.map((ref, idx) => ({
+          text: formatReferenceEntry(ref, doc.citationStyle || 'APA 7', rPage * REFS_PER_SLIDE + idx + 1),
           options: { bullet: true, breakLine: true, paraSpaceAfter: 8 },
         })),
         {
           x: 0.7,
           y: 1.45,
           w: 11.9,
-          h: 5.4,
+          h: 5.0,
           fontSize: 13,
           color: '374151',
           valign: 'top',
           fontFace: 'Arial',
         }
       );
+
+      slide.addText(STUDIO_DOWNLOAD_NOTICE, {
+        x: 0.7,
+        y: 6.75,
+        w: 11.9,
+        h: 0.4,
+        fontSize: 10,
+        italic: true,
+        color: '6B7280',
+        fontFace: 'Arial',
+      });
     }
   }
 
