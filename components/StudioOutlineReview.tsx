@@ -9,6 +9,7 @@ interface StudioOutlineReviewProps {
   onBackToBrief: () => void;
   onGenerate: () => void;
   isStartingJob: boolean;
+  errorMessage?: string | null;
 }
 
 export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
@@ -18,6 +19,7 @@ export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
   onBackToBrief,
   onGenerate,
   isStartingJob,
+  errorMessage,
 }) => {
   const [newSectionTitle, setNewSectionTitle] = useState('');
   const isSlides = brief.fileFormat === 'pptx' || brief.docType === 'presentation';
@@ -88,6 +90,12 @@ export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
           {outline.length} parts · ~{totalBudget.toLocaleString()} words planned
         </span>
       </div>
+
+      {errorMessage && (
+        <div className="p-3.5 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 rounded-lg text-xs font-medium">
+          {errorMessage}
+        </div>
+      )}
 
       <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg divide-y divide-[#E5E7EB] dark:divide-slate-800">
         {outline.map((item, idx) => (

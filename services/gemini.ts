@@ -289,6 +289,127 @@ export const GeminiService = {
     }
   },
 
+  async scolarisChatStream(
+    payload: {
+      messages: any[];
+      message?: string;
+      conversationId?: string | null;
+      courseId?: string | null;
+      courseContext?: string;
+      fileContent?: string;
+    },
+    callbacks: {
+      onStage?: (stage: { stage: string; label: string }) => void;
+      onToken: (token: string) => void;
+      onDone?: (data: any) => void;
+      signal?: AbortSignal;
+    }
+  ): Promise<void> {
+    const resp = await fetch('/api/scolaris/chat/stream', {
+      method: 'POST',
+      headers: await getHeaders(),
+      body: JSON.stringify({
+        messages: payload.messages,
+        message: payload.message,
+        conversationId: payload.conversationId || undefined,
+        courseId: payload.courseId || undefined,
+        courseContext: payload.courseContext,
+        fileContent: payload.fileContent,
+      }),
+      signal: callbacks.signal,
+    });
+
+    if (!resp.ok || !resp.body) {
+      const errText = await resp.text().catch(() => '');
+      throw new Error(errText || 'Failed to start streaming response.');
+    }
+
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+
+      for (const part of parts) {
+        const lines = part.split('\n');
+        let eventName = 'message';
+        let dataStr = '';
+        for (const line of lines) {
+          if (line.startsWith('event:')) eventName = line.slice(6).trim();
+          else if (line.startsWith('data:')) dataStr += line.slice(5).trim();
+        }
+        if (!dataStr) continue;
+        let parsed: any = {};
+        try {
+          parsed = JSON.parse(dataStr);
+        } catch {
+          continue;
+        }
+        if (eventName === 'stage') callbacks.onStage?.(parsed);
+        else if (eventName === 'token' && parsed.text) callbacks.onToken(parsed.text);
+        else if (eventName === 'done') callbacks.onDone?.(parsed);
+        else if (eventName === 'error') throw new Error(parsed.error || 'Streaming error');
+      }
+    }
+  },
+
+  async sendAcademicChatStream(
+    payload: { messages: any[]; academicContext: any },
+    callbacks: {
+      onStage?: (stage: { stage: string; label: string }) => void;
+      onToken: (token: string) => void;
+      onDone?: () => void;
+      signal?: AbortSignal;
+    }
+  ): Promise<void> {
+    const resp = await fetch('/api/ai/academic-chat/stream', {
+      method: 'POST',
+      headers: await getHeaders(),
+      body: JSON.stringify(payload),
+      signal: callbacks.signal,
+    });
+    if (!resp.ok || !resp.body) {
+      throw new Error('Failed to start streaming response.');
+    }
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop() || '';
+      for (const part of parts) {
+        const lines = part.split('\n');
+        let eventName = 'message';
+        let dataStr = '';
+        for (const line of lines) {
+          if (line.startsWith('event:')) eventName = line.slice(6).trim();
+          else if (line.startsWith('data:')) dataStr += line.slice(5).trim();
+        }
+        if (!dataStr) continue;
+        let parsed: any = {};
+        try {
+          parsed = JSON.parse(dataStr);
+        } catch {
+          continue;
+        }
+        if (eventName === 'stage') callbacks.onStage?.(parsed);
+        else if (eventName === 'token' && parsed.text) callbacks.onToken(parsed.text);
+        else if (eventName === 'done') callbacks.onDone?.();
+        else if (eventName === 'error') throw new Error(parsed.error || 'Streaming error');
+      }
+    }
+  },
+
   async extractUrlText(url: string): Promise<{ success: boolean; extractedText?: string; fileName?: string; error?: string }> {
     try {
       const response = await fetch('/api/files/extract-url', {

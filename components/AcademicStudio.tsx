@@ -181,6 +181,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   const [v2Outline, setV2Outline] = useState<StudioOutlineItem[]>([]);
   const [isDraftingV2Outline, setIsDraftingV2Outline] = useState(false);
   const [isStartingV2Job, setIsStartingV2Job] = useState(false);
+  const [v2JobStartError, setV2JobStartError] = useState<string | null>(null);
   const [studioJobs, setStudioJobs] = useState<StudioJob[]>([]);
   const [userFiles, setUserFiles] = useState<UserFile[]>([]);
   const [activeVariant, setActiveVariant] = useState<'primary' | 'document' | 'slides'>('primary');
@@ -273,6 +274,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   const handleV2StartJob = async () => {
     if (!v2Brief || v2Outline.length === 0) return;
     setIsStartingV2Job(true);
+    setV2JobStartError(null);
     try {
       const res = await GeminiService.createStudioV2Job({ brief: v2Brief, outline: v2Outline });
       setV2View('list');
@@ -286,7 +288,9 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
       setDocuments(docs);
       showToast('Generation started in the background.');
     } catch (err: any) {
-      showToast(err?.message || 'Could not start generation.');
+      const msg = err?.message || 'Could not start generation.';
+      setV2JobStartError(msg);
+      showToast(msg);
     } finally {
       setIsStartingV2Job(false);
     }
@@ -1289,9 +1293,13 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           brief={v2Brief}
           outline={v2Outline}
           onChangeOutline={setV2Outline}
-          onBackToBrief={() => setV2View('brief')}
+          onBackToBrief={() => {
+            setV2JobStartError(null);
+            setV2View('brief');
+          }}
           onGenerate={handleV2StartJob}
           isStartingJob={isStartingV2Job}
+          errorMessage={v2JobStartError}
         />
       )}
 

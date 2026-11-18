@@ -1,5 +1,6 @@
 import crypto from 'node:crypto';
 import { SupabaseClient } from '@supabase/supabase-js';
+import { waitUntil } from '@vercel/functions';
 import {
   AcademicDocument,
   CitationStyle,
@@ -278,8 +279,9 @@ export async function retrieveSourcesForBrief(params: {
   if (supabaseAdmin && Array.isArray(brief.uploadedMaterialIds) && brief.uploadedMaterialIds.length > 0) {
     const { data: files } = await supabaseAdmin
       .from('user_files')
-      .select('id, file_name, course_code, extracted_text, uploaded_at')
+      .select('id, file_name, file_type, course_code, course_title, uploaded_at')
       .eq('user_id', userId)
+      .neq('scan_status', 'blocked')
       .in('id', brief.uploadedMaterialIds.slice(0, 10));
 
     for (const f of files || []) {
@@ -289,9 +291,9 @@ export async function retrieveSourcesForBrief(params: {
         title: f.file_name || 'Uploaded Course Material',
         authors: 'Course Material',
         year,
-        sourceType: 'pdf',
+        sourceType: f.file_type?.includes('word') ? 'docx' : 'pdf',
         fileName: f.file_name,
-        contentSnippet: typeof f.extracted_text === 'string' ? f.extracted_text.slice(0, 1400) : f.file_name,
+        contentSnippet: [f.file_name, f.course_code, f.course_title].filter(Boolean).join(' — '),
         isStudentSource: true,
         verified: true,
       });
@@ -401,19 +403,22 @@ export async function triggerStudioStepAsync(params: {
       'x-studio-job-token': token,
     },
     body: JSON.stringify({ stepIndex }),
-  }).catch((err) => {
-    console.warn('[StudioV2] Next-step trigger warning:', err?.message || err);
-  });
+  })
+    .then(async (res) => {
+      if (!res.ok) {
+        const body = await res.text().catch(() => '');
+        console.warn(`[StudioV2] Step trigger HTTP ${res.status} for job=${jobId} step=${stepIndex}: ${body.slice(0, 200)}`);
+      }
+    })
+    .catch((err) => {
+      console.warn('[StudioV2] Next-step trigger warning:', err?.message || err);
+    });
 
   // Use @vercel/functions waitUntil when running on Vercel serverless
   try {
-    const modName = '@vercel/functions';
-    const vf: any = await import(/* @vite-ignore */ modName).catch(() => null);
-    if (vf && typeof vf.waitUntil === 'function') {
-      vf.waitUntil(promise);
-    }
+    waitUntil(promise);
   } catch {
-    // Non-Vercel / local Node keeps promise alive automatically
+    // Local Node keeps the promise alive automatically
   }
 }
 
