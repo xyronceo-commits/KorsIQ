@@ -76,6 +76,7 @@ import StudioVisualCard from './StudioVisualCard';
 import StudioBriefForm from './StudioBriefForm';
 import StudioOutlineReview from './StudioOutlineReview';
 import StudioJobProgress from './StudioJobProgress';
+import { AILiveStatus } from './AILiveStatus';
 
 interface AcademicStudioProps {
   userId: string;
@@ -213,6 +214,25 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
       if (anyTransitioned && userId) {
         const docs = await DBService.getAcademicDocuments(userId);
         setDocuments(docs);
+      } else {
+        // Refresh progressive drafted sections for any currently active job
+        const activeJob = jobs.find((j) => j.status === 'queued' || j.status === 'running');
+        if (activeJob) {
+          const detail = await GeminiService.getStudioV2Job(activeJob.id).catch(() => null);
+          if (detail?.document?.sections && Array.isArray(detail.document.sections)) {
+            setDocuments((prev) =>
+              prev.map((d) =>
+                d.id === activeJob.documentId
+                  ? {
+                      ...d,
+                      sections: detail.document.sections,
+                      currentWordCount: detail.document.current_word_count ?? d.currentWordCount,
+                    }
+                  : d
+              )
+            );
+          }
+        }
       }
     } catch {
       // Non-blocking
@@ -1314,6 +1334,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     key={job.id}
                     job={job}
                     documentTitle={jobDoc?.title}
+                    draftedSections={jobDoc?.sections}
                     onCancel={handleV2CancelJob}
                     onResume={handleV2ResumeJob}
                     onDeleteDocument={handleDeleteDocument}
@@ -1813,6 +1834,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                 key={job.id}
                 job={job}
                 documentTitle={activeDocument.title}
+                draftedSections={activeDocument.sections}
                 onCancel={handleV2CancelJob}
                 onResume={handleV2ResumeJob}
                 onDeleteDocument={handleDeleteDocument}
