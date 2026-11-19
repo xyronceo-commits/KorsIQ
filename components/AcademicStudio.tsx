@@ -89,6 +89,8 @@ import {
   getDocumentTemplateForDoc,
   getSlideTemplateForDoc,
   isSlideDocument,
+  resolveDocumentTemplate,
+  resolveSlideTemplate,
   slideTemplateToVisualPalette,
 } from '../lib/studioTemplates';
 import KorsIQLogo from './KorsIQLogo';
@@ -553,30 +555,58 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   };
 
   /**
-   * Switch visual template post-generation with 0 AI calls and 0 credits.
-   * Content stays decoupled from styling and re-exports immediately with the chosen template.
+   * Switch visual template and/or curated color palette post-generation with 0 AI calls and 0 credits.
+   * Content stays decoupled from styling and re-exports immediately with the chosen template & palette.
    */
-  const handleSwitchTemplateFree = async (chosenId: DocumentTemplateId | SlideTemplateId) => {
+  const handleSwitchTemplateFree = async (
+    chosenId: DocumentTemplateId | SlideTemplateId,
+    chosenPaletteId?: string
+  ) => {
     if (!activeDocument) return;
     const activeIsSlides =
       activeVariant === 'slides' ||
       (activeVariant === 'primary' && isSlideDocument(activeDocument));
 
+    const prevTemplateId = activeIsSlides
+      ? getSlideTemplateForDoc(activeDocument).id
+      : getDocumentTemplateForDoc(activeDocument).id;
+
+    const resolvedSlide = activeIsSlides
+      ? resolveSlideTemplate(chosenId as SlideTemplateId, chosenPaletteId)
+      : null;
+    const resolvedDoc = !activeIsSlides
+      ? resolveDocumentTemplate(chosenId as DocumentTemplateId, chosenPaletteId)
+      : null;
+
+    const effectivePaletteId = activeIsSlides
+      ? resolvedSlide!.activePaletteId
+      : resolvedDoc!.activePaletteId;
+
     const updatedMetadata = {
       ...(activeDocument.metadata || {}),
       ...(activeIsSlides
-        ? { slideTemplateId: chosenId as SlideTemplateId }
-        : { documentTemplateId: chosenId as DocumentTemplateId }),
+        ? {
+            slideTemplateId: resolvedSlide!.id,
+            slidePaletteId: effectivePaletteId,
+          }
+        : {
+            documentTemplateId: resolvedDoc!.id,
+            documentPaletteId: effectivePaletteId,
+          }),
     };
 
     const updatedBrief = activeDocument.brief
       ? {
           ...activeDocument.brief,
           ...(activeIsSlides
-            ? { slideTemplateId: chosenId as SlideTemplateId }
+            ? {
+                slideTemplateId: resolvedSlide!.id,
+                slidePaletteId: effectivePaletteId,
+              }
             : {
-                documentTemplateId: chosenId as DocumentTemplateId,
-                documentStyle: documentTemplateToLegacyStyle(chosenId as DocumentTemplateId),
+                documentTemplateId: resolvedDoc!.id,
+                documentPaletteId: effectivePaletteId,
+                documentStyle: documentTemplateToLegacyStyle(resolvedDoc!.id),
               }),
         }
       : activeDocument.brief;
@@ -588,10 +618,23 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     };
 
     await persistDocument(updatedDoc);
-    const tplName = activeIsSlides
-      ? getSlideTemplateForDoc(updatedDoc).name
-      : getDocumentTemplateForDoc(updatedDoc).name;
-    showToast(`Template switched to ${tplName} (0 credits used).`);
+    if (activeIsSlides && resolvedSlide) {
+      if (prevTemplateId === resolvedSlide.id) {
+        showToast(`Palette switched to ${resolvedSlide.activePaletteName} (0 credits used).`);
+      } else {
+        showToast(
+          `Template switched to ${resolvedSlide.name} · ${resolvedSlide.activePaletteName} (0 credits used).`
+        );
+      }
+    } else if (resolvedDoc) {
+      if (prevTemplateId === resolvedDoc.id) {
+        showToast(`Palette switched to ${resolvedDoc.activePaletteName} (0 credits used).`);
+      } else {
+        showToast(
+          `Template switched to ${resolvedDoc.name} · ${resolvedDoc.activePaletteName} (0 credits used).`
+        );
+      }
+    }
   };
 
   const handleV2SwitchFormat = async (target: 'docx' | 'pdf' | 'convert_to_slides' | 'convert_to_document') => {

@@ -39,9 +39,19 @@ export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const isSlides = brief.fileFormat === 'pptx' || brief.docType === 'presentation';
   const totalBudget = outline.reduce((sum, item) => sum + (Number(item.targetWords) || 0), 0);
-  const activeDocTemplate = resolveDocumentTemplate(brief.documentTemplateId, brief.documentStyle);
-  const activeSlideTemplate = resolveSlideTemplate(brief.slideTemplateId);
+  const activeDocTemplate = resolveDocumentTemplate(
+    brief.documentTemplateId,
+    brief.documentPaletteId,
+    brief.documentStyle
+  );
+  const activeSlideTemplate = resolveSlideTemplate(
+    brief.slideTemplateId,
+    brief.slidePaletteId
+  );
   const activeTemplateName = isSlides ? activeSlideTemplate.name : activeDocTemplate.name;
+  const activePaletteName = isSlides
+    ? activeSlideTemplate.activePaletteName
+    : activeDocTemplate.activePaletteName;
   const isWeeklyLimitReached = Boolean(
     weeklyQuota?.isBetaLimited && typeof weeklyQuota.remaining === 'number' && weeklyQuota.remaining <= 0
   );
@@ -125,7 +135,9 @@ export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
         <div className="flex items-center gap-2">
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-700 text-[#111827] dark:text-slate-200 font-medium">
             <LayoutTemplate size={12} className="text-[#2563EB]" />
-            <span>Template: {activeTemplateName}</span>
+            <span>
+              {activeTemplateName} · {activePaletteName}
+            </span>
           </span>
           {onChangeBrief && (
             <button
@@ -267,18 +279,23 @@ export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
           isOpen={showTemplateModal}
           mode={isSlides ? 'slide' : 'document'}
           initialTemplateId={isSlides ? activeSlideTemplate.id : activeDocTemplate.id}
+          initialPaletteId={
+            isSlides ? activeSlideTemplate.activePaletteId : activeDocTemplate.activePaletteId
+          }
           onClose={() => setShowTemplateModal(false)}
-          onConfirm={(chosenId) => {
+          onConfirm={(chosenId, chosenPaletteId) => {
             if (isSlides) {
               onChangeBrief({
                 ...brief,
                 slideTemplateId: chosenId as SlideTemplateId,
+                slidePaletteId: chosenPaletteId,
               });
             } else {
               const docTplId = chosenId as DocumentTemplateId;
               onChangeBrief({
                 ...brief,
                 documentTemplateId: docTplId,
+                documentPaletteId: chosenPaletteId,
                 documentStyle: documentTemplateToLegacyStyle(docTplId),
               });
             }

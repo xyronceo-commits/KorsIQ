@@ -661,7 +661,9 @@ export interface StudioBrief {
   lengthUnit: StudioLengthUnit;
   documentStyle: StudioDocumentStyle;
   documentTemplateId?: DocumentTemplateId;
+  documentPaletteId?: string;
   slideTemplateId?: SlideTemplateId;
+  slidePaletteId?: string;
   spacing?: '1.5' | 'double';
   visualsEnabled: boolean;
   fileFormat: StudioFileFormat;
@@ -783,7 +785,9 @@ export interface AcademicDocumentMetadata {
   otherFormatLabel?: string;
   visualPreferences?: StudioVisualPreferences;
   documentTemplateId?: DocumentTemplateId;
+  documentPaletteId?: string;
   slideTemplateId?: SlideTemplateId;
+  slidePaletteId?: string;
   lastExportedAt?: string;
 }
 

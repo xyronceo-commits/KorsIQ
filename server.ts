@@ -4689,7 +4689,9 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
           includeReferences: true,
           preferredFormat: brief.fileFormat || 'docx',
           documentTemplateId: brief.documentTemplateId || undefined,
+          documentPaletteId: brief.documentPaletteId || undefined,
           slideTemplateId: brief.slideTemplateId || undefined,
+          slidePaletteId: brief.slidePaletteId || undefined,
           visualPreferences: {
             customized: true,
             designStyle: brief.documentStyle === 'modern_clean' ? 'modern_professional' : 'classic_academic',

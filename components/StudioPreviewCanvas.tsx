@@ -372,6 +372,7 @@ export const StudioDocumentPreview: React.FC<StudioDocumentPreviewProps> = ({
       className="w-full max-w-[780px] mx-auto my-6 sm:my-8 rounded-lg border shadow-xs overflow-hidden"
       data-preview-mode="document"
       data-active-template-id={template.id}
+      data-active-palette-id={template.activePaletteId}
       style={{
         backgroundColor: colors.pageBg,
         borderColor: colors.border === '#000000' ? '#E5E7EB' : colors.border,
@@ -798,6 +799,7 @@ export const StudioSlideDeckPreview: React.FC<StudioSlideDeckPreviewProps> = ({
       className="w-full max-w-[920px] mx-auto my-6 sm:my-8 px-4 sm:px-6 space-y-5"
       data-preview-mode="slides"
       data-active-template-id={template.id}
+      data-active-palette-id={template.activePaletteId}
     >
       {/* Slide Deck Stage (True 16:9 Widescreen) */}
       <div

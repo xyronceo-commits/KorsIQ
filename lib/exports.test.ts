@@ -125,6 +125,152 @@ describe('Template Registries & Defensive Resolution', () => {
     assert.equal(resolveSlideTemplate(null).id, 'academic-classic');
     assert.equal(resolveSlideTemplate('nonexistent-deck').id, 'academic-classic');
   });
+
+  it('exposes curated contrast-checked palettes for every document and slide template', () => {
+    const docPaletteCounts = Object.fromEntries(
+      DOCUMENT_TEMPLATES.map((t) => [t.id, t.palettes.length])
+    );
+    assert.deepEqual(docPaletteCounts, {
+      'university-standard': 3,
+      'academic-clean': 4,
+      'technical-spec': 4,
+      'seminar-editorial': 4,
+      'executive-report': 4,
+    });
+
+    const slidePaletteCounts = Object.fromEntries(
+      SLIDE_TEMPLATES.map((t) => [t.id, t.palettes.length])
+    );
+    assert.deepEqual(slidePaletteCounts, {
+      'pure-minimal': 3,
+      'academic-classic': 4,
+      'technical-grid': 4,
+      'seminar-editorial': 4,
+      'modern-pitch': 5,
+      'executive-dark': 4,
+    });
+  });
+
+  it('resolves non-default curated palettes accurately and falls back cleanly on invalid palette IDs', () => {
+    const emeraldExec = resolveDocumentTemplate('executive-report', 'emerald-corp');
+    assert.equal(emeraldExec.id, 'executive-report');
+    assert.equal(emeraldExec.activePaletteId, 'emerald-corp');
+    assert.equal(emeraldExec.activePaletteName, 'Corporate Emerald');
+    assert.equal(emeraldExec.colors.coverBg, '#064E3B');
+    assert.equal(emeraldExec.colors.accent, '#059669');
+
+    const terracottaDoc = resolveDocumentTemplate('seminar-editorial', 'terracotta-rust');
+    assert.equal(terracottaDoc.activePaletteId, 'terracotta-rust');
+    assert.equal(terracottaDoc.colors.accent, '#9A3412');
+
+    // Unknown or cross-template paletteId falls back to template's default palette
+    const fallbackDoc = resolveDocumentTemplate('executive-report', 'terracotta-rust');
+    assert.equal(fallbackDoc.activePaletteId, 'executive-navy');
+    assert.equal(fallbackDoc.colors.coverBg, '#0F2942');
+
+    const luminousDark = resolveSlideTemplate('executive-dark', 'luminous-emerald');
+    assert.equal(luminousDark.id, 'executive-dark');
+    assert.equal(luminousDark.activePaletteId, 'luminous-emerald');
+    assert.equal(luminousDark.colors.accent, '#10B981');
+    assert.equal(luminousDark.colors.bg, '#0B1615');
+
+    const crimsonPitch = resolveSlideTemplate('modern-pitch', 'signal-crimson');
+    assert.equal(crimsonPitch.activePaletteId, 'signal-crimson');
+    assert.equal(crimsonPitch.colors.accent, '#DC2626');
+
+    // Cross-template or null paletteId on slide template falls back safely to default
+    const fallbackSlide = resolveSlideTemplate('executive-dark', 'signal-crimson');
+    assert.equal(fallbackSlide.activePaletteId, 'electric-blue');
+    assert.equal(resolveSlideTemplate('executive-dark', null).activePaletteId, 'electric-blue');
+  });
+});
+
+describe('Curated Palette Parity Across .docx, .pdf, and .pptx Exports', () => {
+  it('applies non-default document palettes to .docx XML and A4 .pdf output', async () => {
+    const doc = buildSampleDoc(2, 2, {
+      fileFormat: 'docx',
+      metadata: {
+        documentTemplateId: 'executive-report',
+        documentPaletteId: 'emerald-corp',
+      },
+    });
+
+    const docxBlob = await generateDocxBlob(doc);
+    assert.ok(docxBlob.size > 2000);
+    const zip = await JSZip.loadAsync(await docxBlob.arrayBuffer());
+    const docXml = await zip.file('word/document.xml')?.async('string');
+    assert.ok(docXml && docXml.includes('064E3B'), 'Expected Corporate Emerald coverBg #064E3B in DOCX XML');
+    assert.ok(docXml && docXml.includes('059669'), 'Expected Corporate Emerald accent #059669 in DOCX XML');
+
+    const pdfBlob = generatePdfBlob(doc);
+    assert.ok(pdfBlob.size > 1500);
+    assert.equal(await readPdfHeader(pdfBlob), '%PDF-');
+
+    const terracottaDoc = buildSampleDoc(2, 1, {
+      fileFormat: 'pdf',
+      metadata: {
+        documentTemplateId: 'seminar-editorial',
+        documentPaletteId: 'terracotta-rust',
+      },
+    });
+    const terracottaDocx = await generateDocxBlob(terracottaDoc);
+    const terracottaZip = await JSZip.loadAsync(await terracottaDocx.arrayBuffer());
+    const terracottaXml = await terracottaZip.file('word/document.xml')?.async('string');
+    assert.ok(terracottaXml && terracottaXml.includes('9A3412'), 'Expected Terracotta accent #9A3412 in DOCX XML');
+    assert.equal(await readPdfHeader(generatePdfBlob(terracottaDoc)), '%PDF-');
+  });
+
+  it('applies non-default slide palettes to .pptx XML and 16:9 .pdf output', async () => {
+    const darkEmeraldDeck = buildSampleDoc(3, 1, {
+      docType: 'presentation',
+      fileFormat: 'pptx',
+      metadata: {
+        slideTemplateId: 'executive-dark',
+        slidePaletteId: 'luminous-emerald',
+      },
+    });
+
+    const pptxBlob = await generatePptxBlob(darkEmeraldDeck);
+    assert.ok(pptxBlob.size > 3000);
+    const zip = await JSZip.loadAsync(await pptxBlob.arrayBuffer());
+    const slide1Xml = await zip.file('ppt/slides/slide1.xml')?.async('string');
+    assert.ok(slide1Xml && slide1Xml.includes('0B1615'), 'Expected Mint Emerald bg #0B1615 in slide1.xml');
+    assert.ok(slide1Xml && slide1Xml.includes('10B981'), 'Expected Mint Emerald accent #10B981 in slide1.xml');
+
+    const pdfBlob = generatePdfBlob(darkEmeraldDeck);
+    assert.ok(pdfBlob.size > 1500);
+    assert.equal(await readPdfHeader(pdfBlob), '%PDF-');
+
+    const crimsonPitchDeck = buildSampleDoc(2, 1, {
+      docType: 'presentation',
+      fileFormat: 'pptx',
+      metadata: {
+        slideTemplateId: 'modern-pitch',
+        slidePaletteId: 'signal-crimson',
+      },
+    });
+    const crimsonZip = await JSZip.loadAsync(await (await generatePptxBlob(crimsonPitchDeck)).arrayBuffer());
+    const crimsonSlide1 = await crimsonZip.file('ppt/slides/slide1.xml')?.async('string');
+    assert.ok(crimsonSlide1 && crimsonSlide1.includes('DC2626'), 'Expected Signal Crimson accent #DC2626 in slide1.xml');
+  });
+
+  it('gracefully falls back during export when paletteId is invalid or missing', async () => {
+    const doc = buildSampleDoc(1, 1, {
+      metadata: {
+        documentTemplateId: 'academic-clean',
+        documentPaletteId: 'nonexistent-palette',
+        slideTemplateId: 'academic-classic',
+        slidePaletteId: 'nonexistent-palette',
+      },
+    });
+    const docxZip = await JSZip.loadAsync(await (await generateDocxBlob(doc)).arrayBuffer());
+    const docXml = await docxZip.file('word/document.xml')?.async('string');
+    assert.ok(docXml && docXml.includes('1D4ED8'), 'Expected fallback to default University Blue accent #1D4ED8');
+
+    const pptxZip = await JSZip.loadAsync(await (await generatePptxBlob(doc)).arrayBuffer());
+    const slide1Xml = await pptxZip.file('ppt/slides/slide1.xml')?.async('string');
+    assert.ok(slide1Xml && slide1Xml.includes('0F2942'), 'Expected fallback to default Academic Classic titleBg #0F2942');
+  });
 });
 
 describe('Academic Studio Document Exports (.docx & .pdf across all 5 templates)', () => {

@@ -76,11 +76,26 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
   const [citationStyle, setCitationStyle] = useState<CitationStyle>(initialBrief?.citationStyle || 'APA 7');
   const [targetLength, setTargetLength] = useState<number>(initialBrief?.targetLength || 1500);
   const [lengthUnit, setLengthUnit] = useState<StudioLengthUnit>(initialBrief?.lengthUnit || 'words');
+  const initialDocTemplate = resolveDocumentTemplate(
+    initialBrief?.documentTemplateId,
+    initialBrief?.documentPaletteId,
+    initialBrief?.documentStyle
+  );
+  const initialSlideTemplate = resolveSlideTemplate(
+    initialBrief?.slideTemplateId || DEFAULT_SLIDE_TEMPLATE_ID,
+    initialBrief?.slidePaletteId
+  );
   const [documentTemplateId, setDocumentTemplateId] = useState<DocumentTemplateId>(
-    resolveDocumentTemplate(initialBrief?.documentTemplateId, initialBrief?.documentStyle).id
+    initialDocTemplate.id
+  );
+  const [documentPaletteId, setDocumentPaletteId] = useState<string>(
+    initialDocTemplate.activePaletteId
   );
   const [slideTemplateId, setSlideTemplateId] = useState<SlideTemplateId>(
-    resolveSlideTemplate(initialBrief?.slideTemplateId || DEFAULT_SLIDE_TEMPLATE_ID).id
+    initialSlideTemplate.id
+  );
+  const [slidePaletteId, setSlidePaletteId] = useState<string>(
+    initialSlideTemplate.activePaletteId
   );
   const [spacing, setSpacing] = useState<'1.5' | 'double'>(initialBrief?.spacing || '1.5');
   const [visualsEnabled, setVisualsEnabled] = useState<boolean>(initialBrief?.visualsEnabled ?? false);
@@ -221,7 +236,9 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
         lengthUnit,
         documentStyle: documentTemplateToLegacyStyle(documentTemplateId),
         documentTemplateId,
+        documentPaletteId,
         slideTemplateId,
+        slidePaletteId,
         spacing,
         visualsEnabled,
         fileFormat,
@@ -597,9 +614,19 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
         <StudioTemplatePicker
           mode={isSlideMode ? 'slide' : 'document'}
           selectedDocumentTemplateId={documentTemplateId}
+          selectedDocumentPaletteId={documentPaletteId}
           selectedSlideTemplateId={slideTemplateId}
-          onSelectDocumentTemplate={setDocumentTemplateId}
-          onSelectSlideTemplate={setSlideTemplateId}
+          selectedSlidePaletteId={slidePaletteId}
+          onSelectDocumentTemplate={(id) => {
+            setDocumentTemplateId(id);
+            setDocumentPaletteId(resolveDocumentTemplate(id).activePaletteId);
+          }}
+          onSelectDocumentPalette={setDocumentPaletteId}
+          onSelectSlideTemplate={(id) => {
+            setSlideTemplateId(id);
+            setSlidePaletteId(resolveSlideTemplate(id).activePaletteId);
+          }}
+          onSelectSlidePalette={setSlidePaletteId}
           sample={{
             title,
             courseCode,

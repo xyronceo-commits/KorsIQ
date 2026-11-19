@@ -494,6 +494,8 @@ function renderDocumentPdfPass(
   const tableHeaderBgRgb = hexToRgbTuple(tpl.colors.tableHeaderBg, [255, 255, 255]);
   const tableHeaderTextRgb = hexToRgbTuple(tpl.colors.tableHeaderText, [0, 0, 0]);
   const tableStripeBgRgb = hexToRgbTuple(tpl.colors.tableStripeBg, [255, 255, 255]);
+  const pageBgRgb = hexToRgbTuple(tpl.colors.pageBg, [255, 255, 255]);
+  const hasTintedPageBg = tpl.colors.pageBg.toUpperCase() !== '#FFFFFF';
   const coverBgRgb = hexToRgbTuple(tpl.colors.coverBg, [255, 255, 255]);
   const coverTextRgb = hexToRgbTuple(tpl.colors.coverText, [0, 0, 0]);
   const visualPalette = documentTemplateToVisualPalette(tpl);
@@ -503,6 +505,12 @@ function renderDocumentPdfPass(
 
   const pageWidth = pdf.internal.pageSize.getWidth();
   const pageHeight = pdf.internal.pageSize.getHeight();
+  const paintDocPageBg = () => {
+    if (!hasTintedPageBg) return;
+    pdf.setFillColor(...pageBgRgb);
+    pdf.rect(0, 0, pageWidth, pageHeight, 'F');
+  };
+  paintDocPageBg();
   const marginTop = Math.max(16, tpl.marginsIn.top * 25.4);
   const marginRight = Math.max(16, tpl.marginsIn.right * 25.4);
   const marginBottom = Math.max(16, tpl.marginsIn.bottom * 25.4);
@@ -529,6 +537,7 @@ function renderDocumentPdfPass(
   const ensureSpace = (neededMm: number) => {
     if (y + neededMm > bottomLimit) {
       pdf.addPage();
+      paintDocPageBg();
       y = marginTop;
     }
   };
