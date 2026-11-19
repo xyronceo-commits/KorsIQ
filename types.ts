@@ -661,7 +661,9 @@ export interface StudioBrief {
   lengthUnit: StudioLengthUnit;
   documentStyle: StudioDocumentStyle;
   documentTemplateId?: DocumentTemplateId;
+  documentPaletteId?: string;
   slideTemplateId?: SlideTemplateId;
+  slidePaletteId?: string;
   spacing?: '1.5' | 'double';
   visualsEnabled: boolean;
   fileFormat: StudioFileFormat;
@@ -756,6 +758,14 @@ export interface StudioVersion {
   notes?: string;
 }
 
+export interface StudioWeeklyQuota {
+  isBetaLimited: boolean;
+  limit: number | null;
+  used: number;
+  remaining: number | null;
+  resetAt: string | null;
+}
+
 export interface AcademicDocumentMetadata {
   studentName?: string;
   studentId?: string;
@@ -775,7 +785,10 @@ export interface AcademicDocumentMetadata {
   otherFormatLabel?: string;
   visualPreferences?: StudioVisualPreferences;
   documentTemplateId?: DocumentTemplateId;
+  documentPaletteId?: string;
   slideTemplateId?: SlideTemplateId;
+  slidePaletteId?: string;
+  lastExportedAt?: string;
 }
 
 export interface AcademicDocument {

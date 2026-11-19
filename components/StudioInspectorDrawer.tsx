@@ -31,6 +31,7 @@ import {
 } from '../lib/studioTemplates';
 import { BILLING_ENABLED } from '../lib/plans';
 import { STUDIO_DOWNLOAD_NOTICE } from '../lib/studioV2';
+import { PaletteSwatchRow } from './StudioTemplatePicker';
 
 export type StudioInspectorTab = 'sources' | 'ai' | 'brief' | 'template';
 
@@ -67,7 +68,7 @@ interface StudioInspectorDrawerProps {
   onSaveVersionSnapshot: () => void;
   onRestoreVersion: (v: StudioVersion) => void;
   onRequireVersionsUpgrade: () => void;
-  onSwitchTemplateFree: (id: DocumentTemplateId | SlideTemplateId) => void;
+  onSwitchTemplateFree: (id: DocumentTemplateId | SlideTemplateId, paletteId?: string) => void;
   onOpenFullTemplateModal: () => void;
 }
 
@@ -458,12 +459,13 @@ export const StudioInspectorDrawer: React.FC<StudioInspectorDrawerProps> = ({
               {activeIsSlides
                 ? SLIDE_TEMPLATES.map((tpl) => {
                     const selected = tpl.id === activeSlideTpl.id;
+                    const displayColors = selected ? activeSlideTpl.colors : tpl.colors;
                     return (
                       <button
                         key={tpl.id}
                         type="button"
                         data-drawer-template-option={tpl.id}
-                        onClick={() => onSwitchTemplateFree(tpl.id)}
+                        onClick={() => onSwitchTemplateFree(tpl.id, tpl.palettes[0]?.id)}
                         className={`w-full text-left p-3 rounded-lg border transition-colors cursor-pointer flex items-start justify-between gap-2.5 ${
                           selected
                             ? 'border-[#2563EB] bg-[#EFF6FF]/60 dark:bg-blue-950/40'
@@ -474,9 +476,9 @@ export const StudioInspectorDrawer: React.FC<StudioInspectorDrawerProps> = ({
                           <span
                             className="w-5 h-5 rounded border shrink-0 mt-0.5"
                             style={{
-                              backgroundColor: tpl.colors.bg,
-                              borderColor: tpl.colors.accent,
-                              boxShadow: `inset 0 4px 0 0 ${tpl.colors.accent}`,
+                              backgroundColor: displayColors.bg,
+                              borderColor: displayColors.accent,
+                              boxShadow: `inset 0 4px 0 0 ${displayColors.accent}`,
                             }}
                           />
                           <div className="min-w-0">
@@ -494,12 +496,13 @@ export const StudioInspectorDrawer: React.FC<StudioInspectorDrawerProps> = ({
                   })
                 : DOCUMENT_TEMPLATES.map((tpl) => {
                     const selected = tpl.id === activeDocTpl.id;
+                    const displayColors = selected ? activeDocTpl.colors : tpl.colors;
                     return (
                       <button
                         key={tpl.id}
                         type="button"
                         data-drawer-template-option={tpl.id}
-                        onClick={() => onSwitchTemplateFree(tpl.id)}
+                        onClick={() => onSwitchTemplateFree(tpl.id, tpl.palettes[0]?.id)}
                         className={`w-full text-left p-3 rounded-lg border transition-colors cursor-pointer flex items-start justify-between gap-2.5 ${
                           selected
                             ? 'border-[#2563EB] bg-[#EFF6FF]/60 dark:bg-blue-950/40'
@@ -510,9 +513,12 @@ export const StudioInspectorDrawer: React.FC<StudioInspectorDrawerProps> = ({
                           <span
                             className="w-5 h-5 rounded border shrink-0 mt-0.5"
                             style={{
-                              backgroundColor: tpl.colors.pageBg,
-                              borderColor: tpl.colors.border === '#000000' ? '#111827' : tpl.colors.border,
-                              boxShadow: `inset 0 4px 0 0 ${tpl.colors.accent}`,
+                              backgroundColor: displayColors.pageBg,
+                              borderColor:
+                                displayColors.border === '#000000'
+                                  ? '#111827'
+                                  : displayColors.border,
+                              boxShadow: `inset 0 4px 0 0 ${displayColors.accent}`,
                             }}
                           />
                           <div className="min-w-0">
@@ -528,6 +534,37 @@ export const StudioInspectorDrawer: React.FC<StudioInspectorDrawerProps> = ({
                       </button>
                     );
                   })}
+            </div>
+
+            {/* Curated Color Palette Section (0 credits, instant WYSIWYG parity) */}
+            <div
+              data-drawer-palette-section="true"
+              className="pt-4 border-t border-[#E5E7EB] dark:border-slate-800 space-y-2.5"
+            >
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-semibold text-[#111827] dark:text-white">
+                  Color Palette
+                </p>
+                <span className="text-[11px] font-medium text-[#5B6472] dark:text-slate-400">
+                  {activeIsSlides ? activeSlideTpl.activePaletteName : activeDocTpl.activePaletteName}
+                </span>
+              </div>
+              <PaletteSwatchRow
+                palettes={activeIsSlides ? activeSlideTpl.palettes : activeDocTpl.palettes}
+                activePaletteId={
+                  activeIsSlides ? activeSlideTpl.activePaletteId : activeDocTpl.activePaletteId
+                }
+                onSelectPalette={(nextPaletteId) =>
+                  onSwitchTemplateFree(
+                    activeIsSlides ? activeSlideTpl.id : activeDocTpl.id,
+                    nextPaletteId
+                  )
+                }
+                size="md"
+              />
+              <p className="text-[11px] text-[#5B6472] dark:text-slate-400">
+                Curated, contrast-checked presets for {activeIsSlides ? activeSlideTpl.name : activeDocTpl.name}. Updates preview and downloads immediately.
+              </p>
             </div>
           </div>
         )}

@@ -4,12 +4,16 @@ import {
   applyStepFailure,
   buildStudioJobPlan,
   canMountStudioEditor,
+  computeDocumentCardProgress,
   computeOutlineCompletion,
+  computeWeeklyStudioQuota,
   extractCitationIds,
   getMinSourcesForType,
+  isBetaLimitedStudioUser,
   isJobLeaseExpired,
   isStudioKillSwitchEnabled,
   reconcileCitationsAndReferences,
+  selectStudioHomeStatusBar,
   sortAcademicSections,
   STUDIO_V2_LIMITS,
   validateStudioLimits,
@@ -741,6 +745,158 @@ async function runAsyncTests() {
     assert.equal(completion.completedCount, 3);
     assert.equal(completion.totalCount, 4);
     assert.equal(completion.percent, 75);
+  }
+
+  // 12. Beta-only 3/week Academic Studio generation limit (rolling 7 days)
+  {
+    const nowMs = Date.parse('2026-11-19T12:00:00.000Z');
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    // Free beta user -> limited; paid subscriber & admin -> NOT limited
+    assert.equal(
+      isBetaLimitedStudioUser({ billingEnabled: false, tier: 'free', isPro: false, isAdmin: false, nowMs }),
+      true
+    );
+    assert.equal(
+      isBetaLimitedStudioUser({
+        billingEnabled: false,
+        tier: 'studio',
+        isPro: true,
+        subscriptionStatus: 'active',
+        subscriptionEnd: new Date(nowMs + 10 * dayMs).toISOString(),
+        isAdmin: false,
+        nowMs,
+      }),
+      false
+    );
+    assert.equal(
+      isBetaLimitedStudioUser({ billingEnabled: false, tier: 'free', isPro: false, isAdmin: true, nowMs }),
+      false
+    );
+
+    const sampleJobs = [
+      // 3 valid generate jobs within 7 days
+      { job_kind: 'generate', status: 'completed', created_at: new Date(nowMs - 5 * dayMs).toISOString() },
+      { job_kind: 'generate', status: 'completed_with_issues', created_at: new Date(nowMs - 3 * dayMs).toISOString() },
+      { job_kind: 'generate', status: 'running', created_at: new Date(nowMs - 1 * dayMs).toISOString() },
+      // Must NOT count: failed, cancelled, slide conversion, or older than 7 days
+      { job_kind: 'generate', status: 'failed', created_at: new Date(nowMs - 2 * dayMs).toISOString() },
+      { job_kind: 'generate', status: 'cancelled', created_at: new Date(nowMs - 1 * dayMs).toISOString() },
+      { job_kind: 'convert_to_slides', status: 'completed', created_at: new Date(nowMs - 1 * dayMs).toISOString() },
+      { job_kind: 'generate', status: 'completed', created_at: new Date(nowMs - 9 * dayMs).toISOString() },
+    ];
+
+    const betaQuota = computeWeeklyStudioQuota({ jobs: sampleJobs, isBetaLimited: true, nowMs });
+    assert.equal(betaQuota.isBetaLimited, true);
+    assert.equal(betaQuota.limit, 3);
+    assert.equal(betaQuota.used, 3);
+    assert.equal(betaQuota.remaining, 0);
+    assert.equal(betaQuota.resetAt, new Date(nowMs + 2 * dayMs).toISOString());
+
+    // Paid user unaffected
+    const paidQuota = computeWeeklyStudioQuota({ jobs: sampleJobs, isBetaLimited: false, nowMs });
+    assert.equal(paidQuota.isBetaLimited, false);
+    assert.equal(paidQuota.limit, null);
+    assert.equal(paidQuota.remaining, null);
+  }
+
+  // 13. 100% completion progress for completed / exported docs (no misleading 62%)
+  {
+    const completedShortWords = computeDocumentCardProgress({
+      status: 'completed',
+      currentWordCount: 4626,
+      targetWordCount: 7450,
+      sections: [],
+      outline: [],
+      metadata: {},
+    });
+    assert.equal(completedShortWords.isComplete, true);
+    assert.equal(completedShortWords.percent, 100);
+    assert.equal(completedShortWords.wordLabel, '4,626 words · Ready');
+
+    const exportedDoc = computeDocumentCardProgress({
+      status: 'drafting',
+      currentWordCount: 1200,
+      targetWordCount: 3000,
+      sections: [],
+      outline: [],
+      metadata: { lastExportedAt: '2026-11-19T12:00:00.000Z' },
+    });
+    assert.equal(exportedDoc.isComplete, true);
+    assert.equal(exportedDoc.percent, 100);
+
+    const activeDraft = computeDocumentCardProgress(
+      {
+        status: 'drafting',
+        currentWordCount: 4626,
+        targetWordCount: 7450,
+        sections: [{ id: 's1', outlineItemId: 'o1', title: 'Intro', level: 1, order: 1, content: 'Draft', wordCount: 4626, citations: [], status: 'drafted', lastEditedAt: '' }],
+        outline: [],
+        metadata: {},
+      },
+      true
+    );
+    assert.equal(activeDraft.isComplete, false);
+    assert.equal(activeDraft.percent, 62);
+  }
+
+  // 14. Clean slim update strip on Studio home (no persistent completed stacks, deduped by doc+kind)
+  {
+    const makeHomeJob = (id: string, documentId: string, jobKind: StudioJob['jobKind'], status: StudioJob['status'], updatedAt: string): StudioJob => ({
+      id,
+      userId: 'u1',
+      documentId,
+      jobKind,
+      status,
+      plan: [],
+      currentStep: 0,
+      totalSteps: 2,
+      progress: status === 'completed' ? 100 : 40,
+      cancelRequested: false,
+      attempts: 1,
+      createdAt: updatedAt,
+      updatedAt,
+    });
+
+    // Historical completed jobs (including duplicate slide conversions) -> render NOTHING
+    const historicalOnly = selectStudioHomeStatusBar({
+      jobs: [
+        makeHomeJob('j1', 'd1', 'convert_to_slides', 'completed', '2026-11-19T10:00:00Z'),
+        makeHomeJob('j2', 'd1', 'convert_to_slides', 'completed', '2026-11-19T10:05:00Z'),
+        makeHomeJob('j3', 'd1', 'generate', 'completed', '2026-11-19T09:00:00Z'),
+      ],
+      sessionCompletedJobIds: [],
+      dismissedJobIds: [],
+    });
+    assert.equal(historicalOnly, null);
+
+    // Freshly completed in current session -> 1 strip; disappears when dismissed
+    const fresh = selectStudioHomeStatusBar({
+      jobs: [makeHomeJob('j2', 'd1', 'convert_to_slides', 'completed', '2026-11-19T10:05:00Z')],
+      sessionCompletedJobIds: ['j2'],
+      dismissedJobIds: [],
+    });
+    assert.equal(fresh?.mode, 'fresh_completed');
+    assert.equal(fresh?.job.id, 'j2');
+
+    const dismissed = selectStudioHomeStatusBar({
+      jobs: [makeHomeJob('j2', 'd1', 'convert_to_slides', 'completed', '2026-11-19T10:05:00Z')],
+      sessionCompletedJobIds: ['j2'],
+      dismissedJobIds: ['j2'],
+    });
+    assert.equal(dismissed, null);
+
+    // Active running job takes priority
+    const active = selectStudioHomeStatusBar({
+      jobs: [
+        makeHomeJob('j2', 'd1', 'convert_to_slides', 'completed', '2026-11-19T10:05:00Z'),
+        makeHomeJob('j4', 'd2', 'generate', 'running', '2026-11-19T10:06:00Z'),
+      ],
+      sessionCompletedJobIds: ['j2'],
+      dismissedJobIds: [],
+    });
+    assert.equal(active?.mode, 'active');
+    assert.equal(active?.job.id, 'j4');
   }
 
   console.log('All studioV2 tests passed!');

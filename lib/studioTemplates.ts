@@ -3,7 +3,9 @@ import {
   DEFAULT_DOCUMENT_TEMPLATE_ID,
   DOCUMENT_TEMPLATES,
   DocumentTemplate,
+  DocumentTemplatePalette,
   documentTemplateToLegacyStyle,
+  getDefaultDocumentPaletteId,
   isValidDocumentTemplateId,
   legacyStyleToDocumentTemplateId,
   resolveDocumentTemplate,
@@ -12,6 +14,8 @@ import {
   DEFAULT_SLIDE_TEMPLATE_ID,
   SLIDE_TEMPLATES,
   SlideTemplate,
+  SlideTemplatePalette,
+  getDefaultSlidePaletteId,
   isValidSlideTemplateId,
   resolveSlideTemplate,
 } from './slideTemplates';
@@ -20,15 +24,22 @@ export {
   DEFAULT_DOCUMENT_TEMPLATE_ID,
   DOCUMENT_TEMPLATES,
   documentTemplateToLegacyStyle,
+  getDefaultDocumentPaletteId,
   isValidDocumentTemplateId,
   legacyStyleToDocumentTemplateId,
   resolveDocumentTemplate,
   DEFAULT_SLIDE_TEMPLATE_ID,
   SLIDE_TEMPLATES,
+  getDefaultSlidePaletteId,
   isValidSlideTemplateId,
   resolveSlideTemplate,
 };
-export type { DocumentTemplate, SlideTemplate };
+export type {
+  DocumentTemplate,
+  DocumentTemplatePalette,
+  SlideTemplate,
+  SlideTemplatePalette,
+};
 
 export interface TemplateVisualPalette {
   primary: string;
@@ -62,9 +73,11 @@ export function getDocumentTemplateForDoc(
 ): DocumentTemplate {
   const id: DocumentTemplateId | string | undefined =
     doc?.metadata?.documentTemplateId || doc?.brief?.documentTemplateId;
+  const paletteId: string | undefined =
+    doc?.metadata?.documentPaletteId || doc?.brief?.documentPaletteId;
   const legacyStyle =
     doc?.brief?.documentStyle || doc?.metadata?.visualPreferences?.designStyle;
-  return resolveDocumentTemplate(id, legacyStyle);
+  return resolveDocumentTemplate(id, paletteId, legacyStyle);
 }
 
 export function getSlideTemplateForDoc(
@@ -72,7 +85,9 @@ export function getSlideTemplateForDoc(
 ): SlideTemplate {
   const id: SlideTemplateId | string | undefined =
     doc?.metadata?.slideTemplateId || doc?.brief?.slideTemplateId;
-  return resolveSlideTemplate(id);
+  const paletteId: string | undefined =
+    doc?.metadata?.slidePaletteId || doc?.brief?.slidePaletteId;
+  return resolveSlideTemplate(id, paletteId);
 }
 
 export function documentTemplateToVisualPalette(tpl: DocumentTemplate): TemplateVisualPalette {

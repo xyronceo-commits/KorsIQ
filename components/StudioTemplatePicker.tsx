@@ -4,8 +4,12 @@ import { DocumentTemplateId, SlideTemplateId, TemplateCategory } from '../types'
 import {
   DOCUMENT_TEMPLATES,
   DocumentTemplate,
+  DocumentTemplatePalette,
   SLIDE_TEMPLATES,
   SlideTemplate,
+  SlideTemplatePalette,
+  getDefaultDocumentPaletteId,
+  getDefaultSlidePaletteId,
   resolveDocumentTemplate,
   resolveSlideTemplate,
 } from '../lib/studioTemplates';
@@ -24,9 +28,13 @@ export interface TemplatePreviewSample {
 interface StudioTemplatePickerProps {
   mode: TemplatePickerMode;
   selectedDocumentTemplateId: DocumentTemplateId;
+  selectedDocumentPaletteId?: string;
   selectedSlideTemplateId: SlideTemplateId;
-  onSelectDocumentTemplate: (id: DocumentTemplateId) => void;
-  onSelectSlideTemplate: (id: SlideTemplateId) => void;
+  selectedSlidePaletteId?: string;
+  onSelectDocumentTemplate: (id: DocumentTemplateId, paletteId?: string) => void;
+  onSelectSlideTemplate: (id: SlideTemplateId, paletteId?: string) => void;
+  onSelectDocumentPalette?: (paletteId: string) => void;
+  onSelectSlidePalette?: (paletteId: string) => void;
   sample?: TemplatePreviewSample;
   compact?: boolean;
 }
@@ -35,11 +43,76 @@ interface StudioTemplateModalProps {
   isOpen: boolean;
   mode: TemplatePickerMode;
   initialTemplateId: DocumentTemplateId | SlideTemplateId;
+  initialPaletteId?: string;
   onClose: () => void;
-  onConfirm: (id: DocumentTemplateId | SlideTemplateId) => void;
+  onConfirm: (id: DocumentTemplateId | SlideTemplateId, paletteId: string) => void;
   sample?: TemplatePreviewSample;
   titleLabel?: string;
 }
+
+/**
+ * Compact curated color palette swatch selector (no color wheel / hex inputs).
+ * Uses two crisp geometric halves (no CSS gradients) inside a circular swatch.
+ */
+export const PaletteSwatchRow: React.FC<{
+  palettes: readonly (DocumentTemplatePalette | SlideTemplatePalette)[];
+  activePaletteId: string;
+  onSelectPalette: (paletteId: string) => void;
+  size?: 'sm' | 'md';
+  showActiveLabel?: boolean;
+}> = ({
+  palettes,
+  activePaletteId,
+  onSelectPalette,
+  size = 'sm',
+  showActiveLabel = true,
+}) => {
+  const active = palettes.find((p) => p.id === activePaletteId) || palettes[0];
+  const dimClass = size === 'md' ? 'w-6 h-6' : 'w-5 h-5';
+
+  return (
+    <div
+      className="flex flex-wrap items-center gap-2"
+      data-palette-swatch-row="true"
+      onClick={(e) => e.stopPropagation()}
+    >
+      <div className="flex items-center gap-1.5" role="radiogroup" aria-label="Color palette">
+        {palettes.map((palette) => {
+          const isSelected = palette.id === active.id;
+          return (
+            <button
+              key={palette.id}
+              type="button"
+              role="radio"
+              aria-checked={isSelected}
+              aria-label={`Palette: ${palette.name}`}
+              title={palette.name}
+              data-palette-swatch={palette.id}
+              data-palette-selected={isSelected ? 'true' : 'false'}
+              onClick={(e) => {
+                e.stopPropagation();
+                onSelectPalette(palette.id);
+              }}
+              className={`${dimClass} rounded-full overflow-hidden border border-black/20 dark:border-white/25 flex shrink-0 cursor-pointer transition-transform ${
+                isSelected
+                  ? 'ring-2 ring-offset-1 ring-[#111827] dark:ring-white dark:ring-offset-slate-900 scale-105'
+                  : 'hover:scale-105 opacity-90 hover:opacity-100'
+              }`}
+            >
+              <span className="w-1/2 h-full block" style={{ backgroundColor: palette.swatchPrimary }} />
+              <span className="w-1/2 h-full block" style={{ backgroundColor: palette.swatchSecondary }} />
+            </button>
+          );
+        })}
+      </div>
+      {showActiveLabel && (
+        <span className="text-[11px] font-medium text-[#5B6472] dark:text-slate-400 truncate">
+          {active.name}
+        </span>
+      )}
+    </div>
+  );
+};
 
 function getSafeSample(sample?: TemplatePreviewSample) {
   return {
@@ -892,24 +965,37 @@ export const StudioTemplateModal: React.FC<StudioTemplateModalProps> = ({
   isOpen,
   mode,
   initialTemplateId,
+  initialPaletteId,
   onClose,
   onConfirm,
   sample,
   titleLabel,
 }) => {
   const [activeId, setActiveId] = useState<string>(initialTemplateId);
+  const [activePaletteId, setActivePaletteId] = useState<string>(
+    initialPaletteId ||
+      (mode === 'document'
+        ? getDefaultDocumentPaletteId(initialTemplateId)
+        : getDefaultSlidePaletteId(initialTemplateId))
+  );
 
   React.useEffect(() => {
     if (isOpen) {
       setActiveId(initialTemplateId);
+      setActivePaletteId(
+        initialPaletteId ||
+          (mode === 'document'
+            ? getDefaultDocumentPaletteId(initialTemplateId)
+            : getDefaultSlidePaletteId(initialTemplateId))
+      );
     }
-  }, [isOpen, initialTemplateId]);
+  }, [isOpen, initialTemplateId, initialPaletteId, mode]);
 
   if (!isOpen) return null;
 
   const isDoc = mode === 'document';
-  const activeDocTpl = isDoc ? resolveDocumentTemplate(activeId) : null;
-  const activeSlideTpl = !isDoc ? resolveSlideTemplate(activeId) : null;
+  const activeDocTpl = isDoc ? resolveDocumentTemplate(activeId, activePaletteId) : null;
+  const activeSlideTpl = !isDoc ? resolveSlideTemplate(activeId, activePaletteId) : null;
   const activeMeta = isDoc ? activeDocTpl! : activeSlideTpl!;
 
   return (
@@ -935,7 +1021,7 @@ export const StudioTemplateModal: React.FC<StudioTemplateModalProps> = ({
               </h3>
             </div>
             <p className="text-xs text-[#5B6472] dark:text-slate-400 mt-0.5">
-              Preview and switch templates anytime — 0 credits used. Exported files match this layout.
+              Preview templates and color palettes anytime — 0 credits used. Exported files match this layout.
             </p>
           </div>
           <button
@@ -956,7 +1042,10 @@ export const StudioTemplateModal: React.FC<StudioTemplateModalProps> = ({
               <button
                 key={tpl.id}
                 type="button"
-                onClick={() => setActiveId(tpl.id)}
+                onClick={() => {
+                  setActiveId(tpl.id);
+                  setActivePaletteId(tpl.palettes[0].id);
+                }}
                 data-preview-switch-id={tpl.id}
                 className={`px-3 py-1.5 rounded-lg text-xs font-medium border whitespace-nowrap transition-colors min-h-[36px] cursor-pointer ${
                   selected
@@ -972,7 +1061,7 @@ export const StudioTemplateModal: React.FC<StudioTemplateModalProps> = ({
 
         {/* Preview Canvas */}
         <div className="p-4 sm:p-5 overflow-y-auto flex-1 space-y-4">
-          <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-[#E5E7EB] dark:border-slate-800">
+          <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#E5E7EB] dark:border-slate-800">
             <div>
               <div className="flex items-center gap-2">
                 <h4 className="text-sm font-bold text-[#111827] dark:text-white">{activeMeta.name}</h4>
@@ -988,10 +1077,18 @@ export const StudioTemplateModal: React.FC<StudioTemplateModalProps> = ({
                 {activeMeta.tagline} · Best for: {activeMeta.bestFor}
               </p>
             </div>
-            <div className="text-[11px] font-mono text-[#5B6472] dark:text-slate-400">
-              {isDoc
-                ? `${activeDocTpl!.fonts.body} ${activeDocTpl!.sizes.bodyPt}pt · ${activeDocTpl!.lineSpacing}x`
-                : `16:9 · ${activeSlideTpl!.fonts.heading} / ${activeSlideTpl!.fonts.body}`}
+            <div className="flex flex-col sm:items-end gap-1">
+              <PaletteSwatchRow
+                palettes={activeMeta.palettes}
+                activePaletteId={activeMeta.activePaletteId}
+                onSelectPalette={setActivePaletteId}
+                size="md"
+              />
+              <span className="text-[11px] font-mono text-[#5B6472] dark:text-slate-400">
+                {isDoc
+                  ? `${activeDocTpl!.fonts.body} ${activeDocTpl!.sizes.bodyPt}pt · ${activeDocTpl!.lineSpacing}x`
+                  : `16:9 · ${activeSlideTpl!.fonts.heading} / ${activeSlideTpl!.fonts.body}`}
+              </span>
             </div>
           </div>
 
@@ -1018,7 +1115,10 @@ export const StudioTemplateModal: React.FC<StudioTemplateModalProps> = ({
             <button
               type="button"
               onClick={() => {
-                onConfirm(activeMeta.id as DocumentTemplateId | SlideTemplateId);
+                onConfirm(
+                  activeMeta.id as DocumentTemplateId | SlideTemplateId,
+                  activeMeta.activePaletteId
+                );
                 onClose();
               }}
               data-confirm-template="true"
@@ -1037,9 +1137,13 @@ export const StudioTemplateModal: React.FC<StudioTemplateModalProps> = ({
 export const StudioTemplatePicker: React.FC<StudioTemplatePickerProps> = ({
   mode,
   selectedDocumentTemplateId,
+  selectedDocumentPaletteId,
   selectedSlideTemplateId,
+  selectedSlidePaletteId,
   onSelectDocumentTemplate,
   onSelectSlideTemplate,
+  onSelectDocumentPalette,
+  onSelectSlidePalette,
   sample,
   compact = false,
 }) => {
@@ -1059,6 +1163,9 @@ export const StudioTemplatePicker: React.FC<StudioTemplatePickerProps> = ({
   }, [categoryFilter]);
 
   const activeSelection = isDoc ? selectedDocumentTemplateId : selectedSlideTemplateId;
+  const activePaletteSelection = isDoc
+    ? selectedDocumentPaletteId || getDefaultDocumentPaletteId(selectedDocumentTemplateId)
+    : selectedSlidePaletteId || getDefaultSlidePaletteId(selectedSlideTemplateId);
   const totalCount = isDoc ? DOCUMENT_TEMPLATES.length : SLIDE_TEMPLATES.length;
 
   return (
@@ -1075,7 +1182,7 @@ export const StudioTemplatePicker: React.FC<StudioTemplatePickerProps> = ({
             <span>{isDoc ? 'Document Template (A4 Portrait)' : 'Slide Template (16:9 Widescreen)'}</span>
           </h3>
           <p className="text-xs text-[#5B6472] dark:text-slate-400 mt-0.5">
-            Choose a layout before generating. You can switch templates anytime after generation for 0 credits.
+            Choose a layout and color palette before generating. Switch anytime after generation for 0 credits.
           </p>
         </div>
 
@@ -1112,26 +1219,29 @@ export const StudioTemplatePicker: React.FC<StudioTemplatePickerProps> = ({
         className={
           compact
             ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3'
-            : isDoc
-            ? 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5'
             : 'grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3.5'
         }
       >
         {isDoc
-          ? visibleDocTemplates.map((tpl) => {
-              const selected = tpl.id === selectedDocumentTemplateId;
+          ? visibleDocTemplates.map((baseTpl) => {
+              const selected = baseTpl.id === selectedDocumentTemplateId;
+              const resolvedTpl = resolveDocumentTemplate(
+                baseTpl.id,
+                selected ? selectedDocumentPaletteId : undefined
+              );
               return (
                 <div
-                  key={tpl.id}
-                  data-template-card={tpl.id}
+                  key={baseTpl.id}
+                  data-template-card={baseTpl.id}
                   data-template-selected={selected ? 'true' : 'false'}
-                  onClick={() => onSelectDocumentTemplate(tpl.id)}
+                  data-template-palette={resolvedTpl.activePaletteId}
+                  onClick={() => onSelectDocumentTemplate(baseTpl.id, baseTpl.palettes[0].id)}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      onSelectDocumentTemplate(tpl.id);
+                      onSelectDocumentTemplate(baseTpl.id, baseTpl.palettes[0].id);
                     }
                   }}
                   className={`rounded-lg border p-3 transition-colors flex flex-col justify-between gap-2.5 cursor-pointer bg-white dark:bg-slate-900 ${
@@ -1142,7 +1252,7 @@ export const StudioTemplatePicker: React.FC<StudioTemplatePickerProps> = ({
                 >
                   <div className="space-y-2.5">
                     <div className="relative">
-                      <DocumentTemplateThumbnail template={tpl} sample={sample} />
+                      <DocumentTemplateThumbnail template={resolvedTpl} sample={sample} />
                       {selected && (
                         <span className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#2563EB] text-white text-[10px] font-semibold">
                           <Check size={11} />
@@ -1154,28 +1264,43 @@ export const StudioTemplatePicker: React.FC<StudioTemplatePickerProps> = ({
                     <div className="space-y-1">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-semibold text-[#111827] dark:text-white truncate">
-                          {tpl.name}
+                          {baseTpl.name}
                         </span>
                         <span className="text-[10px] font-medium px-1.5 py-0.5 rounded border border-[#E5E7EB] dark:border-slate-700 text-[#5B6472] dark:text-slate-400 shrink-0">
-                          {tpl.category === 'minimal' ? 'Minimal' : 'Designed'}
+                          {baseTpl.category === 'minimal' ? 'Minimal' : 'Designed'}
                         </span>
                       </div>
                       <p className="text-[11px] text-[#5B6472] dark:text-slate-400 leading-snug line-clamp-2">
-                        {tpl.tagline}
+                        {baseTpl.tagline}
                       </p>
                     </div>
+
+                    {/* Curated Color Swatches directly under the selected template */}
+                    {selected && (
+                      <div className="pt-1">
+                        <PaletteSwatchRow
+                          palettes={baseTpl.palettes}
+                          activePaletteId={resolvedTpl.activePaletteId}
+                          onSelectPalette={(pId) => {
+                            if (onSelectDocumentPalette) onSelectDocumentPalette(pId);
+                            else onSelectDocumentTemplate(baseTpl.id, pId);
+                          }}
+                          size="sm"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-[#E5E7EB] dark:border-slate-800">
                     <span className="text-[10px] font-mono text-[#5B6472] dark:text-slate-400 truncate">
-                      {tpl.fonts.body} · {tpl.sizes.bodyPt}pt
+                      {baseTpl.fonts.body} · {baseTpl.sizes.bodyPt}pt
                     </span>
                     <button
                       type="button"
-                      data-template-preview-btn={tpl.id}
+                      data-template-preview-btn={baseTpl.id}
                       onClick={(e) => {
                         e.stopPropagation();
-                        setPreviewTemplateId(tpl.id);
+                        setPreviewTemplateId(baseTpl.id);
                       }}
                       className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-[11px] font-medium text-[#111827] dark:text-slate-200 cursor-pointer min-h-[32px]"
                     >
@@ -1186,20 +1311,25 @@ export const StudioTemplatePicker: React.FC<StudioTemplatePickerProps> = ({
                 </div>
               );
             })
-          : visibleSlideTemplates.map((tpl) => {
-              const selected = tpl.id === selectedSlideTemplateId;
+          : visibleSlideTemplates.map((baseTpl) => {
+              const selected = baseTpl.id === selectedSlideTemplateId;
+              const resolvedTpl = resolveSlideTemplate(
+                baseTpl.id,
+                selected ? selectedSlidePaletteId : undefined
+              );
               return (
                 <div
-                  key={tpl.id}
-                  data-template-card={tpl.id}
+                  key={baseTpl.id}
+                  data-template-card={baseTpl.id}
                   data-template-selected={selected ? 'true' : 'false'}
-                  onClick={() => onSelectSlideTemplate(tpl.id)}
+                  data-template-palette={resolvedTpl.activePaletteId}
+                  onClick={() => onSelectSlideTemplate(baseTpl.id, baseTpl.palettes[0].id)}
                   role="button"
                   tabIndex={0}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      onSelectSlideTemplate(tpl.id);
+                      onSelectSlideTemplate(baseTpl.id, baseTpl.palettes[0].id);
                     }
                   }}
                   className={`rounded-lg border p-3 transition-colors flex flex-col justify-between gap-2.5 cursor-pointer bg-white dark:bg-slate-900 ${
@@ -1210,7 +1340,7 @@ export const StudioTemplatePicker: React.FC<StudioTemplatePickerProps> = ({
                 >
                   <div className="space-y-2.5">
                     <div className="relative">
-                      <SlideTemplateThumbnail template={tpl} sample={sample} />
+                      <SlideTemplateThumbnail template={resolvedTpl} sample={sample} />
                       {selected && (
                         <span className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#2563EB] text-white text-[10px] font-semibold">
                           <Check size={11} />
@@ -1222,28 +1352,43 @@ export const StudioTemplatePicker: React.FC<StudioTemplatePickerProps> = ({
                     <div className="space-y-1">
                       <div className="flex items-center justify-between gap-2">
                         <span className="text-xs font-semibold text-[#111827] dark:text-white truncate">
-                          {tpl.name}
+                          {baseTpl.name}
                         </span>
                         <span className="text-[10px] font-medium px-1.5 py-0.5 rounded border border-[#E5E7EB] dark:border-slate-700 text-[#5B6472] dark:text-slate-400 shrink-0">
-                          {tpl.category === 'minimal' ? 'Minimal' : 'Designed'}
+                          {baseTpl.category === 'minimal' ? 'Minimal' : 'Designed'}
                         </span>
                       </div>
                       <p className="text-[11px] text-[#5B6472] dark:text-slate-400 leading-snug line-clamp-2">
-                        {tpl.tagline}
+                        {baseTpl.tagline}
                       </p>
                     </div>
+
+                    {/* Curated Color Swatches directly under the selected slide template */}
+                    {selected && (
+                      <div className="pt-1">
+                        <PaletteSwatchRow
+                          palettes={baseTpl.palettes}
+                          activePaletteId={resolvedTpl.activePaletteId}
+                          onSelectPalette={(pId) => {
+                            if (onSelectSlidePalette) onSelectSlidePalette(pId);
+                            else onSelectSlideTemplate(baseTpl.id, pId);
+                          }}
+                          size="sm"
+                        />
+                      </div>
+                    )}
                   </div>
 
                   <div className="flex items-center justify-between gap-2 pt-1.5 border-t border-[#E5E7EB] dark:border-slate-800">
                     <span className="text-[10px] font-mono text-[#5B6472] dark:text-slate-400 truncate">
-                      16:9 · {tpl.fonts.heading}
+                      16:9 · {baseTpl.fonts.heading}
                     </span>
                     <button
                       type="button"
-                      data-template-preview-btn={tpl.id}
+                      data-template-preview-btn={baseTpl.id}
                       onClick={(e) => {
                         e.stopPropagation();
-                        setPreviewTemplateId(tpl.id);
+                        setPreviewTemplateId(baseTpl.id);
                       }}
                       className="inline-flex items-center gap-1 px-2.5 py-1 rounded border border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-[11px] font-medium text-[#111827] dark:text-slate-200 cursor-pointer min-h-[32px]"
                     >
@@ -1261,12 +1406,19 @@ export const StudioTemplatePicker: React.FC<StudioTemplatePickerProps> = ({
         isOpen={Boolean(previewTemplateId)}
         mode={mode}
         initialTemplateId={previewTemplateId || activeSelection}
+        initialPaletteId={
+          previewTemplateId && previewTemplateId === activeSelection
+            ? activePaletteSelection
+            : undefined
+        }
         onClose={() => setPreviewTemplateId(null)}
-        onConfirm={(chosenId) => {
+        onConfirm={(chosenId, chosenPaletteId) => {
           if (isDoc) {
-            onSelectDocumentTemplate(chosenId as DocumentTemplateId);
+            onSelectDocumentTemplate(chosenId as DocumentTemplateId, chosenPaletteId);
+            onSelectDocumentPalette?.(chosenPaletteId);
           } else {
-            onSelectSlideTemplate(chosenId as SlideTemplateId);
+            onSelectSlideTemplate(chosenId as SlideTemplateId, chosenPaletteId);
+            onSelectSlidePalette?.(chosenPaletteId);
           }
         }}
         sample={sample}

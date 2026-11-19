@@ -11,7 +11,9 @@ import {
   StudioReference,
   StudioSection,
   StudioVisualBlock,
+  StudioWeeklyQuota,
 } from '../types';
+import { FREE_BETA_LIMITS } from './plans';
 
 export const STUDIO_V2_LIMITS = {
   maxActiveJobsPerUser: 1,
@@ -949,4 +951,217 @@ export function computeOutlineCompletion(sections: StudioSection[]): {
     percent: Math.round((completedCount / totalCount) * 100),
   };
 }
+
+/**
+ * Determines whether a user is subject to the Free Beta 3/week Academic Studio generation cap.
+ * Paid active subscribers and admin accounts are NEVER capped by the beta limit.
+ */
+export function isBetaLimitedStudioUser(input: {
+  billingEnabled: boolean;
+  tier?: string | null;
+  subscriptionTier?: string | null;
+  isPro?: boolean | null;
+  subscriptionStatus?: string | null;
+  subscriptionEnd?: string | null;
+  isAdmin?: boolean | null;
+  nowMs?: number;
+}): boolean {
+  if (input.isAdmin) return false;
+
+  const nowMs = input.nowMs ?? Date.now();
+  const effectiveTier = String(input.subscriptionTier || input.tier || 'free').trim().toLowerCase();
+  const subStatus = String(input.subscriptionStatus || '').trim().toLowerCase();
+  const isPaidTierName = ['plus', 'studio', 'scholar', 'sage'].includes(effectiveTier);
+  const notExpired =
+    !input.subscriptionEnd ||
+    Number.isNaN(Date.parse(input.subscriptionEnd)) ||
+    Date.parse(input.subscriptionEnd) > nowMs;
+  const isStatusActive = subStatus !== 'expired' && subStatus !== 'failed' && subStatus !== 'cancelled';
+  const hasActivePaidSub = Boolean(input.isPro && isPaidTierName && notExpired && isStatusActive);
+
+  if (hasActivePaidSub) return false;
+  // In Free Beta mode (BILLING_ENABLED = false), non-paid non-admin accounts are beta users.
+  // When billing is enabled, free-tier users remain capped while paid tiers are uncapped.
+  return !input.billingEnabled || !hasActivePaidSub;
+}
+
+/**
+ * Computes rolling 7-day Academic Studio full-generation quota.
+ * Counts ONLY `jobKind === 'generate'` jobs whose status is NOT `failed` or `cancelled`.
+ */
+export function computeWeeklyStudioQuota(input: {
+  jobs: Array<{
+    jobKind?: string | null;
+    job_kind?: string | null;
+    status?: string | null;
+    createdAt?: string | null;
+    created_at?: string | null;
+  }>;
+  isBetaLimited: boolean;
+  limit?: number;
+  windowDays?: number;
+  nowMs?: number;
+}): StudioWeeklyQuota {
+  const limit = input.limit ?? FREE_BETA_LIMITS.weeklyStudioGenerationsLimit;
+  const windowDays = input.windowDays ?? FREE_BETA_LIMITS.weeklyStudioWindowDays;
+  const nowMs = input.nowMs ?? Date.now();
+  const windowMs = windowDays * 24 * 60 * 60 * 1000;
+  const cutoffMs = nowMs - windowMs;
+
+  const qualifyingTimestamps: number[] = [];
+  for (const job of input.jobs || []) {
+    const kind = job.jobKind || job.job_kind || 'generate';
+    if (kind !== 'generate') continue;
+    const status = String(job.status || '').toLowerCase();
+    if (status === 'failed' || status === 'cancelled') continue;
+    const rawTs = job.createdAt || job.created_at;
+    if (!rawTs) continue;
+    const ts = Date.parse(rawTs);
+    if (!Number.isFinite(ts) || ts < cutoffMs) continue;
+    qualifyingTimestamps.push(ts);
+  }
+
+  qualifyingTimestamps.sort((a, b) => a - b);
+  const used = qualifyingTimestamps.length;
+
+  if (!input.isBetaLimited) {
+    return {
+      isBetaLimited: false,
+      limit: null,
+      used,
+      remaining: null,
+      resetAt: null,
+    };
+  }
+
+  const remaining = Math.max(0, limit - used);
+  const resetAt =
+    qualifyingTimestamps.length > 0
+      ? new Date(qualifyingTimestamps[0] + windowMs).toISOString()
+      : null;
+
+  return {
+    isBetaLimited: true,
+    limit,
+    used,
+    remaining,
+    resetAt,
+  };
+}
+
+/**
+ * Formats a concise human-readable reset countdown for the beta weekly quota pill.
+ */
+export function formatQuotaResetLabel(resetAt?: string | null, nowMs = Date.now()): string {
+  if (!resetAt) return 'Resets in 7 days';
+  const targetMs = Date.parse(resetAt);
+  if (!Number.isFinite(targetMs)) return 'Resets soon';
+  const diffMs = Math.max(0, targetMs - nowMs);
+  const diffHours = Math.ceil(diffMs / (60 * 60 * 1000));
+  if (diffHours <= 1) return 'Resets in under 1 hour';
+  if (diffHours < 24) return `Resets in ${diffHours} hours`;
+  const diffDays = Math.ceil(diffMs / (24 * 60 * 60 * 1000));
+  if (diffDays === 1) return 'Resets tomorrow';
+  return `Resets in ${diffDays} days`;
+}
+
+/**
+ * Computes consistent document card progress:
+ * - Completed documents, documents with all planned sections finalized, or exported documents ALWAYS show 100% + clean word count.
+ * - Partial percentages are reserved strictly for actively generating or unfinished drafts.
+ */
+export function computeDocumentCardProgress(
+  doc: Pick<AcademicDocument, 'status' | 'currentWordCount' | 'targetWordCount' | 'sections' | 'outline' | 'metadata'>,
+  hasActiveJob = false
+): {
+  isComplete: boolean;
+  percent: number;
+  wordLabel: string;
+} {
+  const words = Math.max(0, Number(doc.currentWordCount) || 0);
+  const target = Math.max(1, Number(doc.targetWordCount) || 1);
+  const sections = Array.isArray(doc.sections) ? doc.sections : [];
+  const hasExported = Boolean(doc.metadata?.lastExportedAt);
+
+  // Count non-front-matter writing sections when outline exists, else all sections
+  const draftedCount = sections.filter((s) => Boolean(s.content && s.content.trim().length > 0)).length;
+  const allSectionsFinalized =
+    !hasActiveJob && sections.length > 0 && draftedCount >= sections.length;
+
+  const isComplete =
+    !hasActiveJob &&
+    (doc.status === 'completed' || hasExported || allSectionsFinalized);
+
+  if (isComplete) {
+    return {
+      isComplete: true,
+      percent: 100,
+      wordLabel: `${words.toLocaleString()} words · Ready`,
+    };
+  }
+
+  const rawPct = Math.round((words / target) * 100);
+  const clampedPct = Math.min(99, Math.max(0, rawPct));
+  return {
+    isComplete: false,
+    percent: clampedPct,
+    wordLabel: `${words.toLocaleString()} / ${target.toLocaleString()} words`,
+  };
+}
+
+/**
+ * Deduplicates Studio jobs by (documentId, jobKind) and selects at most ONE slim update strip
+ * for Academic Studio home:
+ * - Active running/queued job takes priority.
+ * - Otherwise, at most ONE job that freshly completed in the current session (not dismissed).
+ * - Never stacks persistent historical completed-job banners above the document library.
+ */
+export function selectStudioHomeStatusBar(input: {
+  jobs: StudioJob[];
+  sessionCompletedJobIds: Set<string> | string[];
+  dismissedJobIds: Set<string> | string[];
+}): { mode: 'active' | 'fresh_completed'; job: StudioJob } | null {
+  const sessionSet =
+    input.sessionCompletedJobIds instanceof Set
+      ? input.sessionCompletedJobIds
+      : new Set(input.sessionCompletedJobIds || []);
+  const dismissedSet =
+    input.dismissedJobIds instanceof Set
+      ? input.dismissedJobIds
+      : new Set(input.dismissedJobIds || []);
+
+  // Deduplicate by (documentId, jobKind) keeping the most recently updated entry
+  const deduped = new Map<string, StudioJob>();
+  const sorted = [...(input.jobs || [])].sort(
+    (a, b) => Date.parse(b.updatedAt || b.createdAt || '') - Date.parse(a.updatedAt || a.createdAt || '')
+  );
+  for (const job of sorted) {
+    const key = `${job.documentId}:${job.jobKind}`;
+    if (!deduped.has(key)) {
+      deduped.set(key, job);
+    }
+  }
+
+  const uniqueJobs = Array.from(deduped.values());
+
+  // 1. Active running/queued job
+  const active = uniqueJobs.find((j) => j.status === 'queued' || j.status === 'running');
+  if (active) {
+    return { mode: 'active', job: active };
+  }
+
+  // 2. At most one freshly finished job in current session (not dismissed)
+  const fresh = uniqueJobs.find(
+    (j) =>
+      (j.status === 'completed' || j.status === 'completed_with_issues') &&
+      sessionSet.has(j.id) &&
+      !dismissedSet.has(j.id)
+  );
+  if (fresh) {
+    return { mode: 'fresh_completed', job: fresh };
+  }
+
+  return null;
+}
+
 

@@ -1,11 +1,13 @@
 import React, { useState } from 'react';
 import { ArrowDown, ArrowLeft, ArrowUp, LayoutTemplate, Loader2, Plus, Trash2 } from 'lucide-react';
-import { DocumentTemplateId, SlideTemplateId, StudioBrief, StudioOutlineItem } from '../types';
+import { DocumentTemplateId, SlideTemplateId, StudioBrief, StudioOutlineItem, StudioWeeklyQuota } from '../types';
 import {
   documentTemplateToLegacyStyle,
   resolveDocumentTemplate,
   resolveSlideTemplate,
 } from '../lib/studioTemplates';
+import { BILLING_ENABLED } from '../lib/plans';
+import { formatQuotaResetLabel } from '../lib/studioV2';
 import { StudioTemplateModal } from './StudioTemplatePicker';
 
 interface StudioOutlineReviewProps {
@@ -16,6 +18,8 @@ interface StudioOutlineReviewProps {
   onBackToBrief: () => void;
   onGenerate: () => void;
   isStartingJob: boolean;
+  weeklyQuota?: StudioWeeklyQuota | null;
+  onUpgradeClick?: () => void;
   errorMessage?: string | null;
 }
 
@@ -27,15 +31,39 @@ export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
   onBackToBrief,
   onGenerate,
   isStartingJob,
+  weeklyQuota,
+  onUpgradeClick,
   errorMessage,
 }) => {
   const [newSectionTitle, setNewSectionTitle] = useState('');
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const isSlides = brief.fileFormat === 'pptx' || brief.docType === 'presentation';
   const totalBudget = outline.reduce((sum, item) => sum + (Number(item.targetWords) || 0), 0);
-  const activeDocTemplate = resolveDocumentTemplate(brief.documentTemplateId, brief.documentStyle);
-  const activeSlideTemplate = resolveSlideTemplate(brief.slideTemplateId);
+  const activeDocTemplate = resolveDocumentTemplate(
+    brief.documentTemplateId,
+    brief.documentPaletteId,
+    brief.documentStyle
+  );
+  const activeSlideTemplate = resolveSlideTemplate(
+    brief.slideTemplateId,
+    brief.slidePaletteId
+  );
   const activeTemplateName = isSlides ? activeSlideTemplate.name : activeDocTemplate.name;
+  const activePaletteName = isSlides
+    ? activeSlideTemplate.activePaletteName
+    : activeDocTemplate.activePaletteName;
+  const isWeeklyLimitReached = Boolean(
+    weeklyQuota?.isBetaLimited && typeof weeklyQuota.remaining === 'number' && weeklyQuota.remaining <= 0
+  );
+  const formattedResetDate = weeklyQuota?.resetAt
+    ? new Date(weeklyQuota.resetAt).toLocaleString(undefined, {
+        weekday: 'short',
+        month: 'short',
+        day: 'numeric',
+        hour: 'numeric',
+        minute: '2-digit',
+      })
+    : null;
 
   const moveItem = (idx: number, dir: -1 | 1) => {
     const target = idx + dir;
@@ -107,7 +135,9 @@ export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
         <div className="flex items-center gap-2">
           <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-700 text-[#111827] dark:text-slate-200 font-medium">
             <LayoutTemplate size={12} className="text-[#2563EB]" />
-            <span>Template: {activeTemplateName}</span>
+            <span>
+              {activeTemplateName} · {activePaletteName}
+            </span>
           </span>
           {onChangeBrief && (
             <button
@@ -205,11 +235,38 @@ export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
         </button>
       </div>
 
+      {isWeeklyLimitReached && (
+        <div
+          data-studio-weekly-limit-notice="true"
+          className="p-4 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-lg flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-xs"
+        >
+          <div className="space-y-0.5 text-amber-900 dark:text-amber-200">
+            <p className="font-semibold">
+              You have used all {weeklyQuota?.limit ?? 3} of your weekly Free Beta generations.
+            </p>
+            <p className="text-amber-800/90 dark:text-amber-300/90">
+              {formatQuotaResetLabel(weeklyQuota?.resetAt)}
+              {formattedResetDate ? ` (${formattedResetDate})` : ''}. Editing outlines, switching templates, and exporting existing documents stay unlimited.
+            </p>
+          </div>
+          {BILLING_ENABLED && onUpgradeClick && (
+            <button
+              type="button"
+              onClick={onUpgradeClick}
+              className="px-3.5 py-2 bg-[#2563EB] hover:bg-[#1746A2] text-white rounded-lg text-xs font-semibold min-h-[40px] shrink-0 cursor-pointer"
+            >
+              Upgrade Plan
+            </button>
+          )}
+        </div>
+      )}
+
       <div className="flex items-center justify-end gap-3 pt-2">
         <button
           type="button"
+          data-start-generation-btn="true"
           onClick={onGenerate}
-          disabled={isStartingJob || outline.length === 0}
+          disabled={isStartingJob || outline.length === 0 || isWeeklyLimitReached}
           className="inline-flex items-center gap-2 px-6 py-2.5 bg-[#2563EB] hover:bg-[#1746A2] disabled:opacity-60 text-white rounded-lg text-sm font-semibold min-h-[44px] cursor-pointer"
         >
           {isStartingJob ? <Loader2 size={16} className="animate-spin" /> : null}
@@ -222,18 +279,23 @@ export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
           isOpen={showTemplateModal}
           mode={isSlides ? 'slide' : 'document'}
           initialTemplateId={isSlides ? activeSlideTemplate.id : activeDocTemplate.id}
+          initialPaletteId={
+            isSlides ? activeSlideTemplate.activePaletteId : activeDocTemplate.activePaletteId
+          }
           onClose={() => setShowTemplateModal(false)}
-          onConfirm={(chosenId) => {
+          onConfirm={(chosenId, chosenPaletteId) => {
             if (isSlides) {
               onChangeBrief({
                 ...brief,
                 slideTemplateId: chosenId as SlideTemplateId,
+                slidePaletteId: chosenPaletteId,
               });
             } else {
               const docTplId = chosenId as DocumentTemplateId;
               onChangeBrief({
                 ...brief,
                 documentTemplateId: docTplId,
+                documentPaletteId: chosenPaletteId,
                 documentStyle: documentTemplateToLegacyStyle(docTplId),
               });
             }

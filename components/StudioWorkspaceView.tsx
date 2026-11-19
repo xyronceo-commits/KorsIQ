@@ -101,7 +101,7 @@ interface StudioWorkspaceViewProps {
   onSaveVersionSnapshot: () => void;
   onRestoreVersion: (v: StudioVersion) => void;
   onRequireVersionsUpgrade: () => void;
-  onSwitchTemplateFree: (id: DocumentTemplateId | SlideTemplateId) => void;
+  onSwitchTemplateFree: (id: DocumentTemplateId | SlideTemplateId, paletteId?: string) => void;
   onDownloadFormat: (fmt: StudioFileFormat) => void;
   onConvertFormat: (target: 'convert_to_slides' | 'convert_to_document') => void;
 }
@@ -664,6 +664,9 @@ export const StudioWorkspaceView: React.FC<StudioWorkspaceViewProps> = ({
               className="w-full max-w-[760px] mx-auto my-6 sm:my-8 space-y-4"
               data-edit-mode={activeIsSlides ? 'slides' : 'document'}
               data-active-template-id={activeIsSlides ? slideTemplate.id : docTemplate.id}
+              data-active-palette-id={
+                activeIsSlides ? slideTemplate.activePaletteId : docTemplate.activePaletteId
+              }
             >
               {/* Compact Top-of-Canvas Editing Bar */}
               <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg px-3.5 py-2 flex flex-wrap items-center justify-between gap-2">
@@ -911,6 +914,9 @@ export const StudioWorkspaceView: React.FC<StudioWorkspaceViewProps> = ({
         isOpen={showTemplateSwitchModal}
         mode={activeIsSlides ? 'slide' : 'document'}
         initialTemplateId={activeIsSlides ? slideTemplate.id : docTemplate.id}
+        initialPaletteId={
+          activeIsSlides ? slideTemplate.activePaletteId : docTemplate.activePaletteId
+        }
         onClose={() => onToggleTemplateSwitchModal(false)}
         onConfirm={onSwitchTemplateFree}
         sample={{
