@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { UserFile, Course } from '../types';
 import { DBService } from '../services/db';
+import { toSafeExternalUrl } from '../lib/urlSafety';
 import { 
   FileText, 
   Image as ImageIcon, 
@@ -337,11 +338,11 @@ export const RecentFiles: React.FC<RecentFilesProps> = ({
                     Load File
                   </button>
 
-                  {file.downloadUrl && (
+                  {toSafeExternalUrl(file.downloadUrl) && (
                     <a
-                      href={file.downloadUrl}
+                      href={toSafeExternalUrl(file.downloadUrl)!}
                       target="_blank"
-                      rel="noreferrer"
+                      rel="noopener noreferrer"
                       onClick={(e) => e.stopPropagation()}
                       title="Download / View File"
                       className="p-1.5 text-slate-400 hover:text-slate-700 hover:bg-slate-100 rounded-md transition-colors"

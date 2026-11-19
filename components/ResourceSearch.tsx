@@ -3,6 +3,7 @@ import { Search, X, FileText, File, Presentation, Download, ArrowUpRight, AlertC
 import { Course, UserFile } from '../types';
 import { DBService } from '../services/db';
 import { getCurrentUserId } from '../lib/supabase';
+import { toSafeExternalUrl } from '../lib/urlSafety';
 
 export type ResourceFileTypeFilter = 'PDF' | 'PPT' | 'DOCX';
 
@@ -279,8 +280,9 @@ export const ResourceSearch: React.FC<ResourceSearchProps> = ({
       onOpenFile(file);
       return;
     }
-    if (file.downloadUrl) {
-      window.open(file.downloadUrl, '_blank', 'noopener,noreferrer');
+    const safeUrl = toSafeExternalUrl(file.downloadUrl);
+    if (safeUrl) {
+      window.open(safeUrl, '_blank', 'noopener,noreferrer');
     }
   };
 
@@ -490,9 +492,9 @@ export const ResourceSearch: React.FC<ResourceSearchProps> = ({
                           <ArrowUpRight size={13} aria-hidden="true" />
                         </button>
                       )}
-                      {file.downloadUrl && (
+                      {toSafeExternalUrl(file.downloadUrl) && (
                         <a
-                          href={file.downloadUrl}
+                          href={toSafeExternalUrl(file.downloadUrl)!}
                           download={file.fileName}
                           target="_blank"
                           rel="noopener noreferrer"
