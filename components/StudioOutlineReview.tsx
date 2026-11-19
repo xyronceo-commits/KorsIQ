@@ -1,11 +1,18 @@
 import React, { useState } from 'react';
-import { ArrowDown, ArrowLeft, ArrowUp, Loader2, Plus, Trash2 } from 'lucide-react';
-import { StudioBrief, StudioOutlineItem } from '../types';
+import { ArrowDown, ArrowLeft, ArrowUp, LayoutTemplate, Loader2, Plus, Trash2 } from 'lucide-react';
+import { DocumentTemplateId, SlideTemplateId, StudioBrief, StudioOutlineItem } from '../types';
+import {
+  documentTemplateToLegacyStyle,
+  resolveDocumentTemplate,
+  resolveSlideTemplate,
+} from '../lib/studioTemplates';
+import { StudioTemplateModal } from './StudioTemplatePicker';
 
 interface StudioOutlineReviewProps {
   brief: StudioBrief;
   outline: StudioOutlineItem[];
   onChangeOutline: (next: StudioOutlineItem[]) => void;
+  onChangeBrief?: (next: StudioBrief) => void;
   onBackToBrief: () => void;
   onGenerate: () => void;
   isStartingJob: boolean;
@@ -16,14 +23,19 @@ export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
   brief,
   outline,
   onChangeOutline,
+  onChangeBrief,
   onBackToBrief,
   onGenerate,
   isStartingJob,
   errorMessage,
 }) => {
   const [newSectionTitle, setNewSectionTitle] = useState('');
+  const [showTemplateModal, setShowTemplateModal] = useState(false);
   const isSlides = brief.fileFormat === 'pptx' || brief.docType === 'presentation';
   const totalBudget = outline.reduce((sum, item) => sum + (Number(item.targetWords) || 0), 0);
+  const activeDocTemplate = resolveDocumentTemplate(brief.documentTemplateId, brief.documentStyle);
+  const activeSlideTemplate = resolveSlideTemplate(brief.slideTemplateId);
+  const activeTemplateName = isSlides ? activeSlideTemplate.name : activeDocTemplate.name;
 
   const moveItem = (idx: number, dir: -1 | 1) => {
     const target = idx + dir;
@@ -83,12 +95,30 @@ export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
       </div>
 
       <div className="bg-[#EFF6FF] dark:bg-blue-950/40 border border-[#E5E7EB] dark:border-blue-900 rounded-lg px-4 py-3 flex flex-wrap items-center justify-between gap-2 text-xs text-[#1746A2] dark:text-blue-200">
-        <span className="font-medium">
-          {brief.title} ({brief.fileFormat.toUpperCase()})
-        </span>
-        <span>
-          {outline.length} parts · ~{totalBudget.toLocaleString()} words planned
-        </span>
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="font-medium">
+            {brief.title} ({brief.fileFormat.toUpperCase()})
+          </span>
+          <span className="opacity-60">·</span>
+          <span>
+            {outline.length} parts · ~{totalBudget.toLocaleString()} words planned
+          </span>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-700 text-[#111827] dark:text-slate-200 font-medium">
+            <LayoutTemplate size={12} className="text-[#2563EB]" />
+            <span>Template: {activeTemplateName}</span>
+          </span>
+          {onChangeBrief && (
+            <button
+              type="button"
+              onClick={() => setShowTemplateModal(true)}
+              className="px-2.5 py-1 rounded bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-[#2563EB] font-semibold cursor-pointer"
+            >
+              Change (Free)
+            </button>
+          )}
+        </div>
       </div>
 
       {errorMessage && (
@@ -186,6 +216,39 @@ export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
           <span>{isStartingJob ? 'Starting...' : isSlides ? 'Generate Slides' : 'Generate Document'}</span>
         </button>
       </div>
+
+      {onChangeBrief && (
+        <StudioTemplateModal
+          isOpen={showTemplateModal}
+          mode={isSlides ? 'slide' : 'document'}
+          initialTemplateId={isSlides ? activeSlideTemplate.id : activeDocTemplate.id}
+          onClose={() => setShowTemplateModal(false)}
+          onConfirm={(chosenId) => {
+            if (isSlides) {
+              onChangeBrief({
+                ...brief,
+                slideTemplateId: chosenId as SlideTemplateId,
+              });
+            } else {
+              const docTplId = chosenId as DocumentTemplateId;
+              onChangeBrief({
+                ...brief,
+                documentTemplateId: docTplId,
+                documentStyle: documentTemplateToLegacyStyle(docTplId),
+              });
+            }
+          }}
+          sample={{
+            title: brief.title,
+            courseCode: brief.courseCode,
+            courseTitle: brief.courseTitle,
+            studentName: brief.studentName,
+            institution: brief.institution,
+            date: brief.date,
+          }}
+          titleLabel={isSlides ? 'Choose Slide Template (0 Credits)' : 'Choose Document Template (0 Credits)'}
+        />
+      )}
     </div>
   );
 };

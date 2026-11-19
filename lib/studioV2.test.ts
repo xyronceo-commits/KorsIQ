@@ -4,11 +4,13 @@ import {
   applyStepFailure,
   buildStudioJobPlan,
   canMountStudioEditor,
+  computeOutlineCompletion,
   extractCitationIds,
   getMinSourcesForType,
   isJobLeaseExpired,
   isStudioKillSwitchEnabled,
   reconcileCitationsAndReferences,
+  sortAcademicSections,
   STUDIO_V2_LIMITS,
   validateStudioLimits,
   validateVisualBlock,
@@ -717,6 +719,28 @@ async function runAsyncTests() {
     );
     assert.equal(completedGate.canMountEditor, true);
     assert.equal(completedGate.mode, 'editor');
+  }
+
+  // 11. Canonical academic section ordering (Abstract before Introduction, Conclusion at end) & outline completion
+  {
+    const unordered: StudioSection[] = [
+      { id: 's_intro', outlineItemId: 'o2', title: '1.0 Introduction', level: 1, order: 2, content: 'Intro text', wordCount: 2, citations: [], status: 'drafted', lastEditedAt: '' },
+      { id: 's_conc', outlineItemId: 'o3', title: '10.0 Conclusion', level: 1, order: 10, content: 'Conclusion text', wordCount: 2, citations: [], status: 'drafted', lastEditedAt: '' },
+      { id: 's_abs', outlineItemId: 'o1', title: 'Abstract', level: 1, order: 1, content: 'Abstract text', wordCount: 2, citations: [], status: 'drafted', lastEditedAt: '' },
+    ];
+    const sorted = sortAcademicSections(unordered);
+    assert.deepEqual(
+      sorted.map((s) => s.title),
+      ['Abstract', '1.0 Introduction', '10.0 Conclusion']
+    );
+
+    const completion = computeOutlineCompletion([
+      ...sorted,
+      { id: 's_empty', outlineItemId: 'o4', title: 'Appendix', level: 1, order: 4, content: '   ', wordCount: 0, citations: [], status: 'empty', lastEditedAt: '' },
+    ]);
+    assert.equal(completion.completedCount, 3);
+    assert.equal(completion.totalCount, 4);
+    assert.equal(completion.percent, 75);
   }
 
   console.log('All studioV2 tests passed!');

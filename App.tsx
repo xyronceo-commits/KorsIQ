@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { Course, UserProfile, StudySession, AppState, StudyHubData, StudyGroup, AppNotification } from './types';
 import { ICONS } from './constants';
 import { BILLING_ENABLED, getPlanDisplayName } from './lib/plans';
-import { GraduationCap, Menu, X, Lock, Sun, Moon, CheckCheck, Trash2 } from 'lucide-react';
+import { GraduationCap, Menu, X, Lock, Sun, Moon, CheckCheck, Trash2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import { UserAvatar } from './components/UserAvatar';
 import Auth, { type AuthMode } from './components/Auth';
@@ -106,6 +106,24 @@ const App: React.FC = () => {
   });
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  const [isStudioFocusMode, setIsStudioFocusMode] = useState(false);
+  const [sidebarManualOverride, setSidebarManualOverride] = useState<'collapsed' | 'expanded' | null>(null);
+
+  // Reset Studio focus mode when navigating away from Academic Studio
+  useEffect(() => {
+    if (activeTab !== 'studio' && isStudioFocusMode) {
+      setIsStudioFocusMode(false);
+    }
+  }, [activeTab, isStudioFocusMode]);
+
+  const isDesktopSidebarCollapsed =
+    sidebarManualOverride === 'collapsed'
+      ? true
+      : sidebarManualOverride === 'expanded'
+      ? false
+      : activeTab === 'studio' && isStudioFocusMode;
+
+  const isEdgeToEdgeStudio = activeTab === 'studio' && isStudioFocusMode;
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     try {
       return localStorage.getItem('scolaris_theme') === 'dark';
@@ -1078,7 +1096,11 @@ const App: React.FC = () => {
           courses={courses}
           addNotification={addNotification}
           setProfile={handleSaveProfile} 
-          onNavigateTab={(tab) => setActiveTab(tab as AppState)} 
+          onNavigateTab={(tab) => setActiveTab(tab as AppState)}
+          onFocusModeChange={(focused) => {
+            setIsStudioFocusMode(focused);
+            if (focused) setSidebarManualOverride(null);
+          }}
         />;
       case 'pomodoro':
         return <PomodoroTimer />;
@@ -1172,23 +1194,43 @@ const App: React.FC = () => {
         </div>
       </header>
 
-      {/* Desktop and Tablet Fixed Sidebar (Permanently displayed on md and above) */}
-      <aside className="hidden md:flex flex-col w-64 bg-white dark:bg-slate-900 border-r border-[#E5E7EB] dark:border-slate-800 shrink-0 z-30">
-        <div className="h-16 flex items-center justify-between px-5 border-b border-[#E5E7EB] dark:border-slate-800">
-          <KorsIQLogo variant="full" size={32} showSubtitle />
+      {/* Desktop and Tablet Fixed Sidebar (Collapsible to icon-only rail in Studio Focus Mode) */}
+      <aside
+        data-desktop-sidebar-collapsed={isDesktopSidebarCollapsed ? 'true' : 'false'}
+        className={`hidden md:flex flex-col bg-white dark:bg-slate-900 border-r border-[#E5E7EB] dark:border-slate-800 shrink-0 z-30 transition-[width] duration-200 ${
+          isDesktopSidebarCollapsed ? 'w-16' : 'w-64'
+        }`}
+      >
+        <div className={`h-16 flex items-center border-b border-[#E5E7EB] dark:border-slate-800 ${isDesktopSidebarCollapsed ? 'justify-center px-2' : 'justify-between px-4'}`}>
+          {!isDesktopSidebarCollapsed && <KorsIQLogo variant="full" size={30} showSubtitle />}
+          <button
+            type="button"
+            onClick={() =>
+              setSidebarManualOverride(isDesktopSidebarCollapsed ? 'expanded' : 'collapsed')
+            }
+            title={isDesktopSidebarCollapsed ? 'Expand navigation sidebar' : 'Collapse navigation sidebar'}
+            aria-label={isDesktopSidebarCollapsed ? 'Expand navigation sidebar' : 'Collapse navigation sidebar'}
+            className="p-2 rounded-lg text-[#5B6472] hover:text-[#111827] dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer min-h-[38px] min-w-[38px] flex items-center justify-center"
+          >
+            {isDesktopSidebarCollapsed ? <PanelLeftOpen size={17} /> : <PanelLeftClose size={17} />}
+          </button>
         </div>
         
         {/* Navigation Items: Light blue bg with Primary blue text/icon when active */}
-        <nav className="flex-1 px-3 py-4 space-y-1.5 overflow-y-auto">
+        <nav className={`flex-1 py-4 space-y-1.5 overflow-y-auto ${isDesktopSidebarCollapsed ? 'px-2' : 'px-3'}`}>
           {desktopNavItems.map((item) => {
             const isActive = isNavActive(item.id);
             return (
               <button
                 key={item.id}
+                title={isDesktopSidebarCollapsed ? item.label : undefined}
+                aria-label={item.label}
                 onClick={() => {
                   setActiveTab(item.id as AppState);
                 }}
-                className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-lg text-xs font-medium transition-colors min-h-[44px] cursor-pointer ${
+                className={`w-full flex items-center rounded-lg text-xs font-medium transition-colors min-h-[44px] cursor-pointer ${
+                  isDesktopSidebarCollapsed ? 'justify-center px-2' : 'gap-3 px-3 py-2.5'
+                } ${
                   isActive 
                     ? 'bg-[#EFF6FF] text-[#2563EB] font-semibold dark:bg-blue-950/60 dark:text-blue-400' 
                     : 'text-[#5B6472] dark:text-slate-400 hover:text-[#111827] dark:hover:text-slate-100 hover:bg-slate-100 dark:hover:bg-slate-800/60'
@@ -1197,33 +1239,42 @@ const App: React.FC = () => {
                 <div className={isActive ? 'text-[#2563EB] dark:text-blue-400' : 'text-[#5B6472] dark:text-slate-400'}>
                   {item.icon}
                 </div>
-                <span>{item.label}</span>
+                {!isDesktopSidebarCollapsed && <span>{item.label}</span>}
               </button>
             );
           })}
         </nav>
 
         {/* Sidebar Footer */}
-        <div className="p-3 border-t border-[#E5E7EB] dark:border-slate-800 space-y-2">
+        <div className={`border-t border-[#E5E7EB] dark:border-slate-800 space-y-2 ${isDesktopSidebarCollapsed ? 'p-2' : 'p-3'}`}>
           <button
             onClick={toggleTheme}
-            className="w-full flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium text-[#5B6472] dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer min-h-[44px]"
+            title={isDarkMode ? 'Switch to Light Mode' : 'Switch to Dark Mode'}
+            aria-label={isDarkMode ? 'Light Mode' : 'Dark Mode'}
+            className={`w-full flex items-center rounded-lg text-xs font-medium text-[#5B6472] dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer min-h-[44px] ${
+              isDesktopSidebarCollapsed ? 'justify-center px-2' : 'justify-between px-3 py-2'
+            }`}
           >
             <span className="flex items-center gap-2">
               {isDarkMode ? <Sun size={15} className="text-amber-500" /> : <Moon size={15} className="text-[#5B6472]" />}
-              <span>{isDarkMode ? 'Light Mode' : 'Dark Mode'}</span>
+              {!isDesktopSidebarCollapsed && <span>{isDarkMode ? 'Light Mode' : 'Dark Mode'}</span>}
             </span>
-            <span className="text-[10px] font-mono uppercase text-slate-400">
-              {isDarkMode ? 'DARK' : 'LIGHT'}
-            </span>
+            {!isDesktopSidebarCollapsed && (
+              <span className="text-[10px] font-mono uppercase text-slate-400">
+                {isDarkMode ? 'DARK' : 'LIGHT'}
+              </span>
+            )}
           </button>
 
           <div className="flex items-center justify-between pt-1">
             <button 
+              title={isDesktopSidebarCollapsed ? (profile?.name || 'Profile') : undefined}
               onClick={() => {
                 setActiveTab('settings');
               }}
-              className={`flex-1 flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left transition-colors min-h-[44px] cursor-pointer ${
+              className={`flex-1 flex items-center rounded-lg text-left transition-colors min-h-[44px] cursor-pointer ${
+                isDesktopSidebarCollapsed ? 'justify-center px-1 py-2' : 'gap-2.5 px-2.5 py-2'
+              } ${
                 isNavActive('settings') 
                   ? 'bg-[#EFF6FF] text-[#2563EB] font-semibold dark:bg-blue-950/60 dark:text-blue-400' 
                   : 'text-[#111827] dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800'
@@ -1236,14 +1287,16 @@ const App: React.FC = () => {
                 showStatus
                 isOnline={dbConnected ?? true}
               />
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-medium text-[#111827] dark:text-white truncate">
-                  {profile?.name || 'Profile'}
-                </p>
-                <p className="text-[10px] text-[#5B6472] truncate">
-                  {profile?.university || 'Student'}
-                </p>
-              </div>
+              {!isDesktopSidebarCollapsed && (
+                <div className="min-w-0 flex-1">
+                  <p className="text-xs font-medium text-[#111827] dark:text-white truncate">
+                    {profile?.name || 'Profile'}
+                  </p>
+                  <p className="text-[10px] text-[#5B6472] truncate">
+                    {profile?.university || 'Student'}
+                  </p>
+                </div>
+              )}
             </button>
           </div>
         </div>
@@ -1251,7 +1304,8 @@ const App: React.FC = () => {
 
       {/* Main Content Area */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* Desktop & Tablet Top Header Bar */}
+        {/* Desktop & Tablet Top Header Bar (hidden in Studio Focus Mode to avoid stacked headers) */}
+        {!isEdgeToEdgeStudio && (
         <header className="hidden md:flex h-16 bg-white dark:bg-slate-900 border-b border-[#E5E7EB] dark:border-slate-800 items-center justify-between px-8 z-20 shrink-0">
           <div className="flex items-center gap-2 text-xs">
             <span className="text-[#5B6472] font-medium">KorsIQ</span>
@@ -1294,9 +1348,10 @@ const App: React.FC = () => {
             </button>
           </div>
         </header>
+        )}
 
         {/* Scrollable Main Area */}
-        <main className="flex-1 overflow-y-auto bg-[#F8FAFC] dark:bg-slate-950 text-[#111827] dark:text-slate-100 relative pt-14 md:pt-0 pb-24 md:pb-8">
+        <main className={`flex-1 bg-[#F8FAFC] dark:bg-slate-950 text-[#111827] dark:text-slate-100 relative pt-14 md:pt-0 ${isEdgeToEdgeStudio ? 'overflow-hidden pb-14 md:pb-0' : 'overflow-y-auto pb-24 md:pb-8'}`}>
           {showNotifications && (
             <div className="absolute top-4 right-4 sm:right-8 w-80 sm:w-96 bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 shadow-xl rounded-lg z-50 overflow-hidden">
               <div className="p-4 border-b border-[#E5E7EB] dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-800/50">
@@ -1386,7 +1441,7 @@ const App: React.FC = () => {
             </div>
           )}
 
-          <div className="container mx-auto px-4 py-6 sm:px-6 sm:py-8 max-w-6xl">
+          <div className={isEdgeToEdgeStudio ? 'h-full w-full' : 'container mx-auto px-4 py-6 sm:px-6 sm:py-8 max-w-6xl'}>
             {/* Paystack Return Verification Banner */}
             {paymentReturnBanner && (
               <div

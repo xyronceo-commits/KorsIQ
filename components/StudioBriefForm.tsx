@@ -4,8 +4,9 @@ import {
   AcademicDocumentType,
   CitationStyle,
   Course,
+  DocumentTemplateId,
+  SlideTemplateId,
   StudioBrief,
-  StudioDocumentStyle,
   StudioFileFormat,
   StudioLengthUnit,
   UserFile,
@@ -14,6 +15,13 @@ import {
 import { NIGERIAN_UNIVERSITIES } from '../utils/nigerianUniversities';
 import { GeminiService } from '../services/gemini';
 import { STUDIO_V2_LIMITS } from '../lib/studioV2';
+import {
+  DEFAULT_SLIDE_TEMPLATE_ID,
+  documentTemplateToLegacyStyle,
+  resolveDocumentTemplate,
+  resolveSlideTemplate,
+} from '../lib/studioTemplates';
+import { StudioTemplatePicker } from './StudioTemplatePicker';
 
 interface StudioBriefFormProps {
   profile: UserProfile;
@@ -65,7 +73,12 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
   const [citationStyle, setCitationStyle] = useState<CitationStyle>(initialBrief?.citationStyle || 'APA 7');
   const [targetLength, setTargetLength] = useState<number>(initialBrief?.targetLength || 1500);
   const [lengthUnit, setLengthUnit] = useState<StudioLengthUnit>(initialBrief?.lengthUnit || 'words');
-  const [documentStyle, setDocumentStyle] = useState<StudioDocumentStyle>(initialBrief?.documentStyle || 'classic_academic');
+  const [documentTemplateId, setDocumentTemplateId] = useState<DocumentTemplateId>(
+    resolveDocumentTemplate(initialBrief?.documentTemplateId, initialBrief?.documentStyle).id
+  );
+  const [slideTemplateId, setSlideTemplateId] = useState<SlideTemplateId>(
+    resolveSlideTemplate(initialBrief?.slideTemplateId || DEFAULT_SLIDE_TEMPLATE_ID).id
+  );
   const [spacing, setSpacing] = useState<'1.5' | 'double'>(initialBrief?.spacing || '1.5');
   const [visualsEnabled, setVisualsEnabled] = useState<boolean>(initialBrief?.visualsEnabled ?? false);
   const [fileFormat, setFileFormat] = useState<StudioFileFormat>(initialBrief?.fileFormat || 'docx');
@@ -75,6 +88,8 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  const isSlideMode = fileFormat === 'pptx' || docType === 'presentation';
+
   const handleDocTypeChange = (nextType: AcademicDocumentType) => {
     setDocType(nextType);
     const cfg = DOC_TYPES.find((d) => d.id === nextType);
@@ -83,6 +98,8 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
       setLengthUnit(cfg.unit);
       if (nextType === 'presentation') {
         setFileFormat('pptx');
+      } else if (fileFormat === 'pptx') {
+        setFileFormat('docx');
       }
     }
   };
@@ -168,7 +185,9 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
       citationStyle,
       targetLength,
       lengthUnit,
-      documentStyle,
+      documentStyle: documentTemplateToLegacyStyle(documentTemplateId),
+      documentTemplateId,
+      slideTemplateId,
       spacing,
       visualsEnabled,
       fileFormat,
@@ -464,30 +483,20 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
           </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-          <div>
-            <label className="block text-xs font-medium text-[#111827] dark:text-slate-200 mb-1">Document Style</label>
-            <select
-              value={documentStyle}
-              onChange={(e) => setDocumentStyle(e.target.value as StudioDocumentStyle)}
-              className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 rounded-lg text-sm min-h-[44px]"
-            >
-              <option value="classic_academic">Classic academic (Times New Roman 12)</option>
-              <option value="modern_clean">Modern clean</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-xs font-medium text-[#111827] dark:text-slate-200 mb-1">Line Spacing</label>
-            <select
-              value={spacing}
-              onChange={(e) => setSpacing(e.target.value as '1.5' | 'double')}
-              className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 rounded-lg text-sm min-h-[44px]"
-            >
-              <option value="1.5">1.5 spacing</option>
-              <option value="double">Double spacing</option>
-            </select>
-          </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+          {!isSlideMode && (
+            <div>
+              <label className="block text-xs font-medium text-[#111827] dark:text-slate-200 mb-1">Line Spacing</label>
+              <select
+                value={spacing}
+                onChange={(e) => setSpacing(e.target.value as '1.5' | 'double')}
+                className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 rounded-lg text-sm min-h-[44px]"
+              >
+                <option value="1.5">Template default / 1.5 spacing</option>
+                <option value="double">Double spacing (2.0)</option>
+              </select>
+            </div>
+          )}
 
           <div>
             <label className="block text-xs font-medium text-[#111827] dark:text-slate-200 mb-1">Visuals</label>
@@ -517,6 +526,25 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
             </div>
           </div>
         </div>
+      </section>
+
+      {/* 4B. Pre-Generation Visual Template Picker (0 credits) */}
+      <section className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg p-5">
+        <StudioTemplatePicker
+          mode={isSlideMode ? 'slide' : 'document'}
+          selectedDocumentTemplateId={documentTemplateId}
+          selectedSlideTemplateId={slideTemplateId}
+          onSelectDocumentTemplate={setDocumentTemplateId}
+          onSelectSlideTemplate={setSlideTemplateId}
+          sample={{
+            title,
+            courseCode,
+            courseTitle,
+            studentName,
+            institution,
+            date,
+          }}
+        />
       </section>
 
       {/* 5. Optional Sources */}

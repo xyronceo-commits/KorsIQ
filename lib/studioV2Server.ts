@@ -19,6 +19,7 @@ import {
   isJobLeaseExpired,
   reconcileCitationsAndReferences,
   sectionsToContentBlocks,
+  sortAcademicSections,
   STUDIO_V2_LIMITS,
   validateVisualBlock,
 } from './studioV2';
@@ -1210,20 +1211,22 @@ export async function executeStudioJobStep(params: {
         return { status: 'failed' };
       }
 
+      const orderedSections = sortAcademicSections(reconciled.updatedSections, outline);
       const docLike: Pick<AcademicDocument, 'sections' | 'outline' | 'brief' | 'fileFormat'> = {
-        sections: reconciled.updatedSections,
+        sections: orderedSections,
         outline,
         brief,
         fileFormat: brief.fileFormat || docRow.file_format || 'docx',
       };
       const contentBlocks = sectionsToContentBlocks(docLike);
-      const totalWords = reconciled.updatedSections.reduce((sum, s) => sum + (s.wordCount || 0), 0);
+      const totalWords = orderedSections.reduce((sum, s) => sum + (s.wordCount || 0), 0);
 
       const { error: finalUpErr } = await supabaseAdmin
         .from('academic_documents')
         .update({
-          sections: reconciled.updatedSections,
+          sections: orderedSections,
           references: reconciled.usedReferences,
+          source_count: reconciled.usedReferences.length,
           content_blocks: contentBlocks,
           current_word_count: totalWords,
           status: 'completed',

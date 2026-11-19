@@ -626,6 +626,23 @@ export interface StudioReference {
   verified: boolean;
 }
 
+export type TemplateCategory = 'minimal' | 'designed';
+
+export type DocumentTemplateId =
+  | 'university-standard'
+  | 'academic-clean'
+  | 'technical-spec'
+  | 'seminar-editorial'
+  | 'executive-report';
+
+export type SlideTemplateId =
+  | 'pure-minimal'
+  | 'academic-classic'
+  | 'technical-grid'
+  | 'seminar-editorial'
+  | 'modern-pitch'
+  | 'executive-dark';
+
 export interface StudioBrief {
   title: string;
   docType: AcademicDocumentType;
@@ -643,6 +660,8 @@ export interface StudioBrief {
   targetLength: number;
   lengthUnit: StudioLengthUnit;
   documentStyle: StudioDocumentStyle;
+  documentTemplateId?: DocumentTemplateId;
+  slideTemplateId?: SlideTemplateId;
   spacing?: '1.5' | 'double';
   visualsEnabled: boolean;
   fileFormat: StudioFileFormat;
@@ -755,6 +774,8 @@ export interface AcademicDocumentMetadata {
   preferredFormat?: 'docx' | 'pdf' | 'pptx' | 'other';
   otherFormatLabel?: string;
   visualPreferences?: StudioVisualPreferences;
+  documentTemplateId?: DocumentTemplateId;
+  slideTemplateId?: SlideTemplateId;
 }
 
 export interface AcademicDocument {

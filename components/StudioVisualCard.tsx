@@ -8,17 +8,18 @@ import {
   Globe,
   Layers,
   Shield,
-  Sparkles,
   Table2,
   Target,
   Trash2,
   Zap,
 } from 'lucide-react';
 import { StudioDesignStyle, StudioVisualBlock } from '../types';
+import { TemplateVisualPalette } from '../lib/studioTemplates';
 
 interface StudioVisualCardProps {
   block: StudioVisualBlock;
   designStyle?: StudioDesignStyle;
+  palette?: TemplateVisualPalette;
   onRemove?: () => void;
 }
 
@@ -57,6 +58,7 @@ function renderItemIcon(name?: string) {
 export const StudioVisualCard: React.FC<StudioVisualCardProps> = ({
   block,
   designStyle = 'classic_academic',
+  palette,
   onRemove,
 }) => {
   const isClassic = designStyle === 'classic_academic';
@@ -66,6 +68,16 @@ export const StudioVisualCard: React.FC<StudioVisualCardProps> = ({
       className={`my-4 rounded-lg border bg-white text-slate-900 overflow-hidden ${
         isClassic ? 'border-slate-300 font-serif' : 'border-blue-200 font-sans'
       }`}
+      style={
+        palette
+          ? {
+              backgroundColor: palette.surface,
+              borderColor: palette.border,
+              color: palette.ink,
+              fontFamily: palette.fontFamily,
+            }
+          : undefined
+      }
     >
       {/* Header */}
       <div
@@ -74,9 +86,20 @@ export const StudioVisualCard: React.FC<StudioVisualCardProps> = ({
             ? 'bg-slate-50 border-slate-200'
             : 'bg-blue-50/70 border-blue-100'
         }`}
+        style={
+          palette
+            ? {
+                backgroundColor: palette.headerBg,
+                borderColor: palette.border,
+              }
+            : undefined
+        }
       >
         <div className="min-w-0">
-          <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-blue-700 font-sans">
+          <div
+            className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wider text-blue-700 font-sans"
+            style={palette ? { color: palette.primary } : undefined}
+          >
             {block.kind === 'chart' ? (
               <BarChart3 size={12} />
             ) : block.kind === 'flowchart' ? (
@@ -84,11 +107,14 @@ export const StudioVisualCard: React.FC<StudioVisualCardProps> = ({
             ) : block.kind === 'comparison_table' ? (
               <Table2 size={12} />
             ) : (
-              <Sparkles size={12} />
+              <Layers size={12} />
             )}
             <span>{KIND_LABELS[block.kind] || 'Visual Figure'}</span>
           </div>
-          <h4 className="text-sm font-bold text-slate-900 leading-snug mt-0.5">
+          <h4
+            className="text-sm font-bold text-slate-900 leading-snug mt-0.5"
+            style={palette ? { color: palette.ink } : undefined}
+          >
             {block.title}
           </h4>
         </div>
