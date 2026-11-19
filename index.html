@@ -3,9 +3,8 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>KorsIQ — Outsmart Your Syllabus.</title>
-    <meta name="description" content="KorsIQ is an academic platform for university students to track CGPA, plan reading schedules, study course materials, and produce structured academic papers." />
-    <meta name="keywords" content="KorsIQ, AI study planner, CGPA calculator, academic studio, student productivity platform, study circles, university study companion, outsmart your syllabus" />
+    <title>KorsIQ — AI Study Workspace &amp; Academic Studio for Students</title>
+    <meta name="description" content="KorsIQ is an AI-powered student productivity workspace for university students with Academic Studio, CGPA Calculator, Study Hub, timetables, and Study Circles." />
     <meta name="application-name" content="KorsIQ" />
     <meta name="apple-mobile-web-app-title" content="KorsIQ" />
     <meta name="theme-color" content="#2563EB" />
@@ -16,9 +15,8 @@
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 
-    <!-- Google Search Console & Search Engine Verification -->
-    <meta name="google-site-verification" content="MoRzQwun2wEGYjmr6Wea_xrh5MXkJ88I1YUyIqvJ92Y" />
-    <meta name="msvalidate.01" content="korsiq-bing-webmaster-verification" />
+    <!-- Google Search Console Verification (configurable via VITE_GOOGLE_SITE_VERIFICATION) -->
+    <!-- GOOGLE_SITE_VERIFICATION_META -->
 
     <!-- Canonical URL -->
     <link rel="canonical" href="https://korsiq.com.ng/" />
@@ -35,18 +33,19 @@
     <meta property="og:type" content="website" />
     <meta property="og:site_name" content="KorsIQ" />
     <meta property="og:url" content="https://korsiq.com.ng/" />
-    <meta property="og:title" content="KorsIQ — Outsmart Your Syllabus." />
-    <meta property="og:description" content="KorsIQ is an academic platform for university students to track CGPA, plan reading schedules, study course materials, and produce structured academic papers." />
+    <meta property="og:title" content="KorsIQ — AI Study Workspace &amp; Academic Studio for Students" />
+    <meta property="og:description" content="KorsIQ is an AI-powered student productivity workspace for university students with Academic Studio, CGPA Calculator, Study Hub, timetables, and Study Circles." />
     <meta property="og:image" content="https://korsiq.com.ng/og-image.png" />
     <meta property="og:image:width" content="1200" />
     <meta property="og:image:height" content="630" />
-    <meta property="og:image:alt" content="KorsIQ: Outsmart Your Syllabus." />
+    <meta property="og:image:alt" content="KorsIQ — Outsmart Your Syllabus. Academic workspace for university students." />
 
     <!-- X / Twitter Card Metadata -->
     <meta name="twitter:card" content="summary_large_image" />
-    <meta name="twitter:title" content="KorsIQ — Outsmart Your Syllabus." />
-    <meta name="twitter:description" content="KorsIQ is an academic platform for university students to track CGPA, plan reading schedules, study course materials, and produce structured academic papers." />
+    <meta name="twitter:title" content="KorsIQ — AI Study Workspace &amp; Academic Studio for Students" />
+    <meta name="twitter:description" content="KorsIQ is an AI-powered student productivity workspace for university students with Academic Studio, CGPA Calculator, Study Hub, timetables, and Study Circles." />
     <meta name="twitter:image" content="https://korsiq.com.ng/og-image.png" />
+    <meta name="twitter:image:alt" content="KorsIQ — Outsmart Your Syllabus. Academic workspace for university students." />
 
     <!-- Structured Data (Schema.org JSON-LD) -->
     <script type="application/ld+json">
@@ -58,15 +57,9 @@
           "@id": "https://korsiq.com.ng/#website",
           "url": "https://korsiq.com.ng/",
           "name": "KorsIQ",
-          "description": "Study smarter with KorsIQ. Turn learning materials into summaries, flashcards, quizzes and AI podcasts, plan your studies, collaborate in private study circles and improve your academic workflow.",
+          "description": "AI-powered student productivity workspace for university students featuring Academic Studio, deterministic CGPA tracking, Study Hub, timetables, and private Study Circles.",
           "publisher": {
-            "@type": "Organization",
-            "name": "KorsIQ",
-            "url": "https://korsiq.com.ng/",
-            "logo": {
-              "@type": "ImageObject",
-              "url": "https://korsiq.com.ng/korsiq-logo-512.png"
-            }
+            "@id": "https://korsiq.com.ng/#organization"
           }
         },
         {
@@ -74,14 +67,19 @@
           "@id": "https://korsiq.com.ng/#organization",
           "name": "KorsIQ",
           "url": "https://korsiq.com.ng/",
-          "logo": "https://korsiq.com.ng/korsiq-logo-512.png",
+          "logo": {
+            "@type": "ImageObject",
+            "url": "https://korsiq.com.ng/korsiq-logo-512.png",
+            "width": 512,
+            "height": 512
+          },
           "slogan": "Outsmart Your Syllabus."
         },
         {
           "@type": "WebPage",
           "@id": "https://korsiq.com.ng/#webpage",
           "url": "https://korsiq.com.ng/",
-          "name": "KorsIQ — AI-Powered Study & Academic Workspace",
+          "name": "KorsIQ — AI Study Workspace & Academic Studio for Students",
           "description": "Your courses, CGPA, study plan and coursework in one calm workspace.",
           "isPartOf": {
             "@id": "https://korsiq.com.ng/#website"
@@ -94,34 +92,24 @@
           "@type": "SoftwareApplication",
           "@id": "https://korsiq.com.ng/#application",
           "name": "KorsIQ",
-          "operatingSystem": "All modern web browsers",
+          "url": "https://korsiq.com.ng/",
+          "operatingSystem": "Web, Android",
           "applicationCategory": "EducationalApplication",
-          "description": "AI-powered academic productivity workspace featuring deterministic CGPA tracking, realistic approved study timetables, section-by-section Academic Studio drafting, private study circles, and lecture resource library.",
-          "offers": [
-            {
-              "@type": "Offer",
-              "name": "Free",
-              "price": "0",
-              "priceCurrency": "NGN",
-              "description": "CGPA and course tracking, study timetable, limited AI help"
-            },
-            {
-              "@type": "Offer",
-              "name": "Plus",
-              "price": "7500",
-              "priceCurrency": "NGN",
-              "billingDuration": "P1M",
-              "description": "More AI help, Lite Studio and exports, create circles"
-            },
-            {
-              "@type": "Offer",
-              "name": "Academic Studio",
-              "price": "15000",
-              "priceCurrency": "NGN",
-              "billingDuration": "P1M",
-              "description": "Full Studio workspace, version history, highest AI allowance"
-            }
-          ]
+          "description": "AI-powered academic workspace for university students featuring deterministic CGPA tracking, approved study timetables, section-by-section Academic Studio drafting, Study Hub tools, private Study Circles, and a personal resource library.",
+          "featureList": [
+            "Academic Studio for structured outlines, section-by-section drafting, verifiable citations, and Word, PDF, and PowerPoint exports",
+            "Deterministic CGPA calculator and target GPA projection",
+            "Course management and student-approved study timetables",
+            "Study Hub for course summaries, flashcards, quizzes, practice tests, and study chat",
+            "Private Study Circles and personal academic resource library"
+          ],
+          "offers": {
+            "@type": "Offer",
+            "name": "Early Access",
+            "price": "0",
+            "priceCurrency": "NGN",
+            "description": "Free during early access."
+          }
         }
       ]
     }
@@ -181,7 +169,15 @@
           <div style="width:45%;height:100%;background:#2563EB;border-radius:999px;"></div>
         </div>
         <noscript>
-          <p style="margin-top:16px;color:#111827;font-size:14px;">KorsIQ — Outsmart Your Syllabus. Enable JavaScript to continue.</p>
+          <main style="max-width:640px;margin:20px auto 0;color:#111827;font-size:14px;line-height:1.6;">
+            <h1 style="font-size:22px;font-weight:700;margin-bottom:8px;">KorsIQ — Outsmart Your Syllabus.</h1>
+            <p style="color:#5B6472;margin-bottom:12px;">
+              Your courses, CGPA, study plan, and coursework in one calm AI-powered workspace for university students.
+            </p>
+            <p style="color:#5B6472;font-size:13px;">
+              Includes Academic Studio (outline, draft, and export to Word, PDF, and PowerPoint), deterministic CGPA Calculator, Study Hub (summaries, flashcards, quizzes, and study chat), approved study timetables, private Study Circles, and your personal resource library. Enable JavaScript to launch KorsIQ.
+            </p>
+          </main>
         </noscript>
       </div>
     </div>

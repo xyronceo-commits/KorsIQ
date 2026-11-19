@@ -31,19 +31,19 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onStart, onSignIn }) =
       label: 'Overview',
       src: '/screenshots/overview.png',
       alt: 'KorsIQ Overview workspace showing priorities, study schedule, course snapshot, and recent documents',
-      path: 'korsiq.app/overview'
+      path: 'korsiq.com.ng/overview'
     },
     hub: {
       label: 'Study Hub',
       src: '/screenshots/study-hub.png',
       alt: 'KorsIQ Study Hub showing course workbenches and discipline-tailored AI study chat',
-      path: 'korsiq.app/study-hub'
+      path: 'korsiq.com.ng/study-hub'
     },
     studio: {
       label: 'Academic Studio',
       src: '/screenshots/studio.png',
       alt: 'KorsIQ Academic Studio showing structured academic planning, section drafting, and Word/PDF export',
-      path: 'korsiq.app/studio'
+      path: 'korsiq.com.ng/studio'
     }
   };
 
@@ -149,11 +149,12 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onStart, onSignIn }) =
               <div className="w-10" />
             </div>
 
-            {/* Real Screenshot Image */}
+            {/* Real Screenshot Image (LCP hero asset loaded eagerly) */}
             <img
               src={screenshots[activeScreenshot].src}
               alt={screenshots[activeScreenshot].alt}
-              loading="lazy"
+              loading="eager"
+              fetchPriority="high"
               width={1920}
               height={1200}
               className="w-full h-auto block bg-white dark:bg-slate-950"
@@ -244,9 +245,9 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onStart, onSignIn }) =
       {/* 4. Callout Banner: "AI helps inside each task. You stay in control." */}
       <section className="py-10 px-4 sm:px-6">
         <div className="max-w-4xl mx-auto rounded-lg bg-[#EFF6FF] dark:bg-blue-950/40 border border-[#2563EB]/20 p-8 sm:p-10 text-center">
-          <h3 className="text-lg sm:text-xl font-bold text-[#1746A2] dark:text-blue-300">
+          <h2 className="text-lg sm:text-xl font-bold text-[#1746A2] dark:text-blue-300">
             AI helps inside each task. You stay in control.
-          </h3>
+          </h2>
           <p className="mt-2 text-sm sm:text-base text-[#5B6472] dark:text-slate-300 max-w-2xl mx-auto">
             You approve every outline and plan, and you are responsible for what you submit.
           </p>
@@ -371,32 +372,40 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onStart, onSignIn }) =
             <div className="grid grid-cols-3 gap-4 pt-2">
               {/* Product */}
               <div>
-                <h4 className="text-xs font-semibold text-[#111827] dark:text-white uppercase tracking-wider mb-2.5">Product</h4>
+                <p className="text-xs font-semibold text-[#111827] dark:text-white uppercase tracking-wider mb-2.5">Product</p>
                 <ul className="space-y-2 text-xs text-[#5B6472] dark:text-slate-400">
                   <li>
-                    <button 
-                      type="button" 
-                      onClick={() => scrollToSection('features')}
+                    <a
+                      href="#features"
+                      onClick={(e) => {
+                        e.preventDefault();
+                        scrollToSection('features');
+                      }}
                       className="hover:text-[#2563EB] transition-colors cursor-pointer"
                     >
                       Features
-                    </button>
+                    </a>
                   </li>
-                  <li>
-                    <button 
-                      type="button" 
-                      onClick={() => scrollToSection('pricing')}
-                      className="hover:text-[#2563EB] transition-colors cursor-pointer"
-                    >
-                      Pricing
-                    </button>
-                  </li>
+                  {BILLING_ENABLED && (
+                    <li>
+                      <a
+                        href="#pricing"
+                        onClick={(e) => {
+                          e.preventDefault();
+                          scrollToSection('pricing');
+                        }}
+                        className="hover:text-[#2563EB] transition-colors cursor-pointer"
+                      >
+                        Pricing
+                      </a>
+                    </li>
+                  )}
                 </ul>
               </div>
 
               {/* Company */}
               <div>
-                <h4 className="text-xs font-semibold text-[#111827] dark:text-white uppercase tracking-wider mb-2.5">Company</h4>
+                <p className="text-xs font-semibold text-[#111827] dark:text-white uppercase tracking-wider mb-2.5">Company</p>
                 <ul className="space-y-2 text-xs text-[#5B6472] dark:text-slate-400">
                   <li>
                     <button 
@@ -421,7 +430,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({ onStart, onSignIn }) =
 
               {/* Legal */}
               <div>
-                <h4 className="text-xs font-semibold text-[#111827] dark:text-white uppercase tracking-wider mb-2.5">Legal</h4>
+                <p className="text-xs font-semibold text-[#111827] dark:text-white uppercase tracking-wider mb-2.5">Legal</p>
                 <ul className="space-y-2 text-xs text-[#5B6472] dark:text-slate-400">
                   <li>
                     <button 
