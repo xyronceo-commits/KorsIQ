@@ -7,6 +7,8 @@ interface StudioJobProgressProps {
   job: StudioJob;
   documentTitle?: string;
   draftedSections?: StudioSection[];
+  retrievalWarnings?: string[];
+  showOpenButton?: boolean;
   onCancel: (jobId: string) => void;
   onResume: (jobId: string) => void;
   onDeleteDocument?: (documentId: string) => void;
@@ -17,6 +19,8 @@ export const StudioJobProgress: React.FC<StudioJobProgressProps> = ({
   job,
   documentTitle,
   draftedSections = [],
+  retrievalWarnings = [],
+  showOpenButton = true,
   onCancel,
   onResume,
   onDeleteDocument,
@@ -113,20 +117,13 @@ export const StudioJobProgress: React.FC<StudioJobProgressProps> = ({
                 className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-[#2563EB] hover:bg-[#1746A2] text-white rounded-lg text-xs font-medium min-h-[44px] cursor-pointer"
               >
                 <RotateCcw size={14} />
-                <span>Resume</span>
-              </button>
-              <button
-                type="button"
-                onClick={() => onOpenDocument(job.documentId)}
-                className="px-3 py-2 border border-[#E5E7EB] dark:border-slate-700 rounded-lg text-xs font-medium text-[#111827] dark:text-slate-200 min-h-[44px] cursor-pointer"
-              >
-                Open Partial Draft
+                <span>{isFailed ? 'Retry' : 'Resume'}</span>
               </button>
               {onDeleteDocument && (
                 <button
                   type="button"
                   onClick={() => onDeleteDocument(job.documentId)}
-                  aria-label="Delete partial draft"
+                  aria-label="Delete incomplete draft"
                   className="p-2 border border-[#E5E7EB] dark:border-slate-700 rounded-lg text-rose-600 hover:bg-rose-50 min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
                 >
                   <Trash2 size={15} />
@@ -135,7 +132,7 @@ export const StudioJobProgress: React.FC<StudioJobProgressProps> = ({
             </>
           )}
 
-          {isDone && (
+          {isDone && showOpenButton && (
             <button
               type="button"
               onClick={() => onOpenDocument(job.documentId)}
@@ -156,15 +153,27 @@ export const StudioJobProgress: React.FC<StudioJobProgressProps> = ({
         </div>
       )}
 
-      {/* Progressive Content Preview as sections finish */}
-      {isRunning && completedDrafts.length > 0 && (
+      {retrievalWarnings.length > 0 && (
+        <div className="px-3 py-2 bg-slate-50 dark:bg-slate-800/60 border border-[#E5E7EB] dark:border-slate-700 rounded-lg text-xs text-[#5B6472] dark:text-slate-300 space-y-1">
+          {retrievalWarnings.slice(0, 3).map((warn, idx) => (
+            <p key={idx}>{warn}</p>
+          ))}
+        </div>
+      )}
+
+      {/* Read-only Progressive / Recoverable Content Preview (no editing controls) */}
+      {(isRunning || isFailed || isCancelled) && completedDrafts.length > 0 && (
         <div className="pt-2 border-t border-[#E5E7EB] dark:border-slate-800 space-y-2">
           <button
             type="button"
             onClick={() => setShowPreview((p) => !p)}
             className="flex items-center justify-between w-full text-xs font-medium text-[#2563EB] hover:text-[#1746A2] cursor-pointer"
           >
-            <span>Live draft preview ({completedDrafts.length} {completedDrafts.length === 1 ? 'part' : 'parts'} written)</span>
+            <span>
+              {isRunning
+                ? `Live read-only preview (${completedDrafts.length} ${completedDrafts.length === 1 ? 'part' : 'parts'} written)`
+                : `Saved progress (${completedDrafts.length} ${completedDrafts.length === 1 ? 'part' : 'parts'} preserved for ${isFailed ? 'retry' : 'resume'})`}
+            </span>
             {showPreview ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
           </button>
           {showPreview && (

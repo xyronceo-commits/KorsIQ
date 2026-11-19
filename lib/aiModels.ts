@@ -254,11 +254,12 @@ export function buildGenerateConfigForAttempt(
     if (next.maxOutputTokens !== undefined && next.maxOutputTokens < HEAVY_MIN_MAX_OUTPUT_TOKENS) {
       next.maxOutputTokens = HEAVY_MIN_MAX_OUTPUT_TOKENS;
     }
-    if (options.abortSignal) {
-      next.abortSignal = options.abortSignal;
-    }
   } else {
     delete next.thinkingConfig;
+  }
+
+  if (options.abortSignal) {
+    next.abortSignal = options.abortSignal;
   }
 
   return next;

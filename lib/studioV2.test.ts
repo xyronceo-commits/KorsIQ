@@ -3,6 +3,7 @@ import {
   applyStepCancel,
   applyStepFailure,
   buildStudioJobPlan,
+  canMountStudioEditor,
   extractCitationIds,
   getMinSourcesForType,
   isJobLeaseExpired,
@@ -12,7 +13,18 @@ import {
   validateStudioLimits,
   validateVisualBlock,
 } from './studioV2';
-import { StudioJob, StudioOutlineItem, StudioReference, StudioSection } from '../types';
+import {
+  executeStudioJobStep,
+  retrieveSourcesWithDiagnostics,
+} from './studioV2Server';
+import {
+  AcademicDocument,
+  StudioBrief,
+  StudioJob,
+  StudioOutlineItem,
+  StudioReference,
+  StudioSection,
+} from '../types';
 
 // 1. Step planner: retrieval first, body sections, visuals, conclusion & abstract LAST
 {
@@ -204,4 +216,513 @@ import { StudioJob, StudioOutlineItem, StudioReference, StudioSection } from '..
   assert.equal(cancelled.leaseUntil, null);
 }
 
-console.log('All studioV2 tests passed!');
+// ==========================================
+// IN-MEMORY SUPABASE MOCK FOR PIPELINE TESTS
+// ==========================================
+
+function createMockSupabase(initial: {
+  jobs?: Record<string, any>;
+  docs?: Record<string, any>;
+  userFiles?: any[];
+}) {
+  const tables: Record<string, any[]> = {
+    studio_jobs: Object.values(initial.jobs || {}).map((r) => ({ ...r })),
+    academic_documents: Object.values(initial.docs || {}).map((r) => ({ ...r })),
+    user_files: (initial.userFiles || []).map((r) => ({ ...r })),
+    user_notifications: [],
+  };
+
+  const makeQuery = (table: string) => {
+    const filters: Array<(row: any) => boolean> = [];
+    let pendingUpdate: Record<string, any> | null = null;
+    let pendingInsert: Record<string, any> | null = null;
+
+    const execute = async () => {
+      const rows = tables[table] || [];
+      if (pendingInsert) {
+        rows.push({ ...pendingInsert });
+        return { data: pendingInsert, error: null };
+      }
+      const matched = rows.filter((r) => filters.every((f) => f(r)));
+      if (pendingUpdate) {
+        for (const r of matched) {
+          Object.assign(r, pendingUpdate);
+        }
+        return { data: matched, error: null };
+      }
+      return { data: matched, error: null };
+    };
+
+    const api: any = {
+      select() {
+        return api;
+      },
+      update(patch: Record<string, any>) {
+        pendingUpdate = patch;
+        return api;
+      },
+      insert(row: Record<string, any>) {
+        pendingInsert = row;
+        return execute();
+      },
+      eq(col: string, val: any) {
+        filters.push((r) => r[col] === val);
+        return api;
+      },
+      neq(col: string, val: any) {
+        filters.push((r) => r[col] !== null && r[col] !== undefined && r[col] !== val);
+        return api;
+      },
+      in(col: string, vals: any[]) {
+        filters.push((r) => vals.includes(r[col]));
+        return api;
+      },
+      async maybeSingle() {
+        const res = await execute();
+        return { data: Array.isArray(res.data) ? res.data[0] || null : res.data, error: res.error };
+      },
+      then(resolve: any, reject: any) {
+        return execute().then(resolve, reject);
+      },
+    };
+    return api;
+  };
+
+  return {
+    tables,
+    client: {
+      from(table: string) {
+        return makeQuery(table);
+      },
+    } as any,
+  };
+}
+
+const sampleBrief: StudioBrief = {
+  title: 'Solar Microgrids in Rural Nigeria',
+  docType: 'assignment',
+  courseCode: 'EEE 401',
+  courseTitle: 'Power Systems',
+  supervisorName: 'Dr. Bello',
+  studentName: 'Adaeze Okafor',
+  matricNumber: '20/1022',
+  department: 'Electrical Engineering',
+  faculty: 'Engineering',
+  institution: 'University of Lagos',
+  date: '19 November 2026',
+  instructions: 'Discuss technical design and rural impact of solar microgrids.',
+  citationStyle: 'APA 7',
+  targetLength: 1000,
+  lengthUnit: 'words',
+  documentStyle: 'classic_academic',
+  visualsEnabled: false,
+  fileFormat: 'docx',
+  uploadedMaterialIds: [],
+};
+
+const sampleOutline: StudioOutlineItem[] = [
+  { id: 'o_cov', title: 'Cover Page', level: 1, order: 0, description: '', targetWords: 0, kind: 'cover', approved: true },
+  { id: 'o_intro', title: 'Introduction', level: 1, order: 1, description: 'Introduce solar microgrids', targetWords: 300, kind: 'body', approved: true },
+  { id: 'o_body', title: 'System Design', level: 1, order: 2, description: 'Analyze microgrid topology', targetWords: 400, kind: 'body', approved: true },
+  { id: 'o_conc', title: 'Conclusion', level: 1, order: 3, description: 'Synthesize findings', targetWords: 200, kind: 'conclusion', approved: true },
+  { id: 'o_ref', title: 'References', level: 1, order: 4, description: '', targetWords: 0, kind: 'references', approved: true },
+];
+
+async function runAsyncTests() {
+  // 6. No uploaded resources + external lookup timeout/failure -> non-blocking fallback straight to drafting
+  {
+    const plan = buildStudioJobPlan(sampleOutline, {
+      fileFormat: 'docx',
+      docType: 'assignment',
+      visualsEnabled: false,
+    });
+    const mock = createMockSupabase({
+      docs: {
+        doc_no_res: {
+          id: 'doc_no_res',
+          user_id: 'u1',
+          title: sampleBrief.title,
+          doc_type: sampleBrief.docType,
+          instructions: sampleBrief.instructions,
+          citation_style: 'APA 7',
+          status: 'drafting',
+          brief: sampleBrief,
+          outline: sampleOutline,
+          sections: [],
+          references: [],
+          metadata: {},
+          file_format: 'docx',
+        },
+      },
+      jobs: {
+        job_no_res: {
+          id: 'job_no_res',
+          user_id: 'u1',
+          document_id: 'doc_no_res',
+          job_kind: 'generate',
+          status: 'queued',
+          plan,
+          current_step: 0,
+          total_steps: plan.length,
+          progress: 0,
+          cancel_requested: false,
+          lease_until: null,
+          attempts: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      },
+    });
+
+    // External fetch fails (simulating network outage / timeout)
+    const failingFetch = (async () => {
+      throw new Error('ECONNREFUSED');
+    }) as any;
+
+    const aiPromptsSeen: string[] = [];
+    const mockAI = async ({ messages }: any) => {
+      aiPromptsSeen.push(messages[0]?.content || '');
+      return 'Solar microgrids provide resilient decentralized electricity for rural communities [source needed].';
+    };
+
+    // Step 0: retrieve_sources must NOT stall or fail — must transition cleanly to step 1 (drafting)
+    const step0 = await executeStudioJobStep({
+      supabaseAdmin: mock.client,
+      jobId: 'job_no_res',
+      stepIndex: 0,
+      runAICall: mockAI,
+      baseUrl: 'http://localhost:3000',
+      fetchImpl: failingFetch,
+      autoTriggerNext: false,
+    });
+    assert.equal(step0.status, 'running');
+    assert.equal(step0.nextStep, 1);
+    assert.equal(step0.resourceStatus, 'fallback_no_sources');
+
+    // Run remaining steps to full completion
+    let curStep = step0.nextStep!;
+    while (curStep < plan.length) {
+      const res = await executeStudioJobStep({
+        supabaseAdmin: mock.client,
+        jobId: 'job_no_res',
+        stepIndex: curStep,
+        runAICall: mockAI,
+        baseUrl: 'http://localhost:3000',
+        fetchImpl: failingFetch,
+        autoTriggerNext: false,
+      });
+      if (res.status === 'completed' || res.status === 'completed_with_issues') break;
+      assert.equal(res.status, 'running');
+      curStep = res.nextStep!;
+    }
+
+    const finalJob = mock.tables.studio_jobs[0];
+    const finalDoc = mock.tables.academic_documents[0];
+    assert.equal(finalJob.status, 'completed');
+    assert.equal(finalJob.progress, 100);
+    assert.equal(finalDoc.status, 'completed');
+    assert.equal(finalDoc.sections.length, 3);
+    assert.ok(finalDoc.content_blocks.length > 0);
+    assert.equal(aiPromptsSeen.length, 3);
+    // No fabricated references
+    assert.equal(finalDoc.references.length, 0);
+  }
+
+  // 7. Multiple uploaded resources where item index 0 fails -> skips file 0 with warning, extracts files 1 & 2, passes text into drafting
+  {
+    const uploadedBrief: StudioBrief = {
+      ...sampleBrief,
+      uploadedMaterialIds: ['f0', 'f1', 'f2'],
+    };
+
+    const mock = createMockSupabase({
+      userFiles: [
+        { id: 'f0', user_id: 'u1', file_name: 'corrupted_first.pdf', file_type: 'application/pdf', storage_path: 'users/u1/corrupted.pdf', scan_status: null, uploaded_at: '2026-10-01T00:00:00Z' },
+        { id: 'f1', user_id: 'u1', file_name: 'lecture_notes.txt', file_type: 'text/plain', storage_path: 'users/u1/lecture_notes.txt', scan_status: 'clean', uploaded_at: '2026-10-02T00:00:00Z' },
+        { id: 'f2', user_id: 'u1', file_name: 'case_study.txt', file_type: 'text/plain', storage_path: 'users/u1/case_study.txt', scan_status: 'clean', uploaded_at: '2026-10-03T00:00:00Z' },
+      ],
+    });
+
+    const mockDownload = async (_uid: string, storagePath: string) => {
+      if (storagePath.includes('corrupted.pdf')) {
+        throw new Error('Corrupted storage stream on index 0');
+      }
+      if (storagePath.includes('lecture_notes.txt')) {
+        return { buffer: Buffer.from('Lecture notes: Hybrid PV-battery microgrids reduce diesel generator runtime by 60 percent in off-grid villages.') };
+      }
+      return { buffer: Buffer.from('Case study: Rural microgrid deployment in Ogun State achieved 98 percent uptime across 120 households.') };
+    };
+
+    // External lookup returns empty so we test uploaded file extraction cleanly
+    const emptyFetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [], message: { items: [] } }),
+    })) as any;
+
+    const retrieval = await retrieveSourcesWithDiagnostics({
+      supabaseAdmin: mock.client,
+      userId: 'u1',
+      brief: uploadedBrief,
+      fetchImpl: emptyFetch,
+      downloadFileBuffer: mockDownload,
+      bypassCache: true,
+    });
+
+    assert.equal(retrieval.failedFiles, 1);
+    assert.equal(retrieval.processedFiles, 2);
+    assert.equal(retrieval.references.length, 2);
+    assert.equal(retrieval.resourceStatus, 'partial');
+    assert.ok(retrieval.warnings.some((w) => w.includes('corrupted_first.pdf')));
+    assert.ok(retrieval.references[0].contentSnippet?.includes('Hybrid PV-battery microgrids'));
+    assert.ok(retrieval.references[1].contentSnippet?.includes('Ogun State'));
+  }
+
+  // 8. Partial external lookup failure (OpenAlex fails, Crossref succeeds) -> preserves verified sources & notes limitation
+  {
+    const partialFetch = (async (url: string) => {
+      if (url.includes('openalex.org')) {
+        return { ok: false, status: 503, json: async () => ({}) };
+      }
+      return {
+        ok: true,
+        status: 200,
+        json: async () => ({
+          message: {
+            items: [
+              {
+                title: ['Decentralized Renewable Grids in West Africa'],
+                author: [{ family: 'Adebayo', given: 'K.' }],
+                published: { 'date-parts': [[2025]] },
+                DOI: '10.1000/microgrid.2025',
+                abstract: 'Empirical study of village solar grids.',
+              },
+            ],
+          },
+        }),
+      };
+    }) as any;
+
+    const retrieval = await retrieveSourcesWithDiagnostics({
+      supabaseAdmin: null,
+      userId: 'u1',
+      brief: { ...sampleBrief, title: 'Unique Partial External Lookup Topic' },
+      fetchImpl: partialFetch,
+      bypassCache: true,
+    });
+
+    assert.equal(retrieval.references.length, 1);
+    assert.equal(retrieval.references[0].verified, true);
+    assert.equal(retrieval.references[0].doi, '10.1000/microgrid.2025');
+    assert.equal(retrieval.resourceStatus, 'partial');
+    assert.ok(retrieval.warnings.some((w) => w.includes('OpenAlex')));
+  }
+
+  // 9. Drafting failure preserves previously completed sections safely across retries
+  {
+    const plan = buildStudioJobPlan(sampleOutline, {
+      fileFormat: 'docx',
+      docType: 'assignment',
+      visualsEnabled: false,
+    });
+    const mock = createMockSupabase({
+      docs: {
+        doc_fail_sec: {
+          id: 'doc_fail_sec',
+          user_id: 'u1',
+          title: sampleBrief.title,
+          doc_type: sampleBrief.docType,
+          instructions: sampleBrief.instructions,
+          citation_style: 'APA 7',
+          status: 'drafting',
+          brief: sampleBrief,
+          outline: sampleOutline,
+          sections: [],
+          references: [],
+          metadata: {},
+          file_format: 'docx',
+        },
+      },
+      jobs: {
+        job_fail_sec: {
+          id: 'job_fail_sec',
+          user_id: 'u1',
+          document_id: 'doc_fail_sec',
+          job_kind: 'generate',
+          status: 'queued',
+          plan,
+          current_step: 0,
+          total_steps: plan.length,
+          progress: 0,
+          cancel_requested: false,
+          lease_until: null,
+          attempts: 0,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        },
+      },
+    });
+
+    const emptyFetch = (async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ results: [], message: { items: [] } }),
+    })) as any;
+
+    let aiCallCount = 0;
+    const flakyAI = async () => {
+      aiCallCount += 1;
+      if (aiCallCount === 1) {
+        return 'Completed Introduction paragraph safely persisted.';
+      }
+      // Section 2 fails on both initial attempt and fast retry
+      throw new Error('Upstream model timeout on section 2');
+    };
+
+    // Step 0: retrieve_sources
+    const s0 = await executeStudioJobStep({
+      supabaseAdmin: mock.client,
+      jobId: 'job_fail_sec',
+      stepIndex: 0,
+      runAICall: flakyAI,
+      baseUrl: 'http://localhost:3000',
+      fetchImpl: emptyFetch,
+      autoTriggerNext: false,
+    });
+    assert.equal(s0.nextStep, 1);
+
+    // Step 1 (Introduction): succeeds and persists
+    const s1 = await executeStudioJobStep({
+      supabaseAdmin: mock.client,
+      jobId: 'job_fail_sec',
+      stepIndex: 1,
+      runAICall: flakyAI,
+      baseUrl: 'http://localhost:3000',
+      fetchImpl: emptyFetch,
+      autoTriggerNext: false,
+    });
+    assert.equal(s1.nextStep, 2);
+    assert.equal(mock.tables.academic_documents[0].sections.length, 1);
+    assert.ok(mock.tables.academic_documents[0].sections[0].content.includes('safely persisted'));
+
+    // Step 2 (System Design) attempt 1: fails -> retries on fast fallback, preserving section 1
+    const s2a = await executeStudioJobStep({
+      supabaseAdmin: mock.client,
+      jobId: 'job_fail_sec',
+      stepIndex: 2,
+      runAICall: flakyAI,
+      baseUrl: 'http://localhost:3000',
+      fetchImpl: emptyFetch,
+      autoTriggerNext: false,
+    });
+    assert.equal(s2a.status, 'retrying');
+    assert.equal(mock.tables.academic_documents[0].sections.length, 1);
+    assert.ok(mock.tables.academic_documents[0].sections[0].content.includes('safely persisted'));
+
+    // Step 2 attempt 2: exhausts retries -> flags needs_attention, advances to step 3, STILL preserves section 1!
+    const s2b = await executeStudioJobStep({
+      supabaseAdmin: mock.client,
+      jobId: 'job_fail_sec',
+      stepIndex: 2,
+      runAICall: flakyAI,
+      baseUrl: 'http://localhost:3000',
+      fetchImpl: emptyFetch,
+      autoTriggerNext: false,
+    });
+    assert.equal(s2b.status, 'running');
+    assert.equal(s2b.nextStep, 3);
+    assert.equal(mock.tables.studio_jobs[0].plan[2].status, 'needs_attention');
+    assert.equal(mock.tables.academic_documents[0].sections.length, 1);
+    assert.ok(mock.tables.academic_documents[0].sections[0].content.includes('safely persisted'));
+  }
+
+  // 10. Strict Editor Mounting Gate (canMountStudioEditor)
+  {
+    const baseDoc: Pick<AcademicDocument, 'id' | 'status' | 'sections' | 'contentBlocks' | 'brief'> = {
+      id: 'doc_gate',
+      status: 'drafting',
+      brief: sampleBrief,
+      sections: [
+        {
+          id: 's1',
+          outlineItemId: 'o_intro',
+          title: 'Introduction',
+          level: 1,
+          order: 1,
+          content: 'Partial drafted text while running.',
+          status: 'drafted',
+          wordCount: 5,
+          citations: [],
+          lastEditedAt: '',
+        },
+      ],
+      contentBlocks: [],
+    };
+
+    const makeJob = (status: StudioJob['status']): StudioJob => ({
+      id: 'j_gate',
+      userId: 'u1',
+      documentId: 'doc_gate',
+      jobKind: 'generate',
+      status,
+      plan: [],
+      currentStep: 0,
+      totalSteps: 5,
+      progress: status === 'completed' ? 100 : 20,
+      cancelRequested: status === 'cancelled',
+      leaseUntil: null,
+      attempts: 0,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+
+    // Active generation: editor MUST NOT mount even if partial sections exist
+    const runningGate = canMountStudioEditor(baseDoc, [makeJob('running')], false);
+    assert.equal(runningGate.canMountEditor, false);
+    assert.equal(runningGate.mode, 'generating');
+
+    const queuedGate = canMountStudioEditor(baseDoc, [makeJob('queued')], false);
+    assert.equal(queuedGate.canMountEditor, false);
+    assert.equal(queuedGate.mode, 'generating');
+
+    // Failed generation: editor MUST NOT mount even if partial sections exist
+    const failedGate = canMountStudioEditor(baseDoc, [makeJob('failed')], false);
+    assert.equal(failedGate.canMountEditor, false);
+    assert.equal(failedGate.mode, 'failed');
+
+    // Cancelled generation: editor MUST NOT mount
+    const cancelledGate = canMountStudioEditor(baseDoc, [makeJob('cancelled')], false);
+    assert.equal(cancelledGate.canMountEditor, false);
+    assert.equal(cancelledGate.mode, 'cancelled');
+
+    // Hydrating jobs on refresh: never flash editor prematurely
+    const loadingGate = canMountStudioEditor(baseDoc, [], true);
+    assert.equal(loadingGate.canMountEditor, false);
+    assert.equal(loadingGate.mode, 'loading');
+
+    // Completed job WITHOUT persisted content: editor MUST NOT mount
+    const emptyCompletedGate = canMountStudioEditor(
+      { ...baseDoc, status: 'completed', sections: [], contentBlocks: [] },
+      [makeJob('completed')],
+      false
+    );
+    assert.equal(emptyCompletedGate.canMountEditor, false);
+    assert.equal(emptyCompletedGate.mode, 'failed');
+
+    // Completed job WITH persisted content: editor mounts cleanly
+    const completedGate = canMountStudioEditor(
+      { ...baseDoc, status: 'completed' },
+      [makeJob('completed')],
+      false
+    );
+    assert.equal(completedGate.canMountEditor, true);
+    assert.equal(completedGate.mode, 'editor');
+  }
+
+  console.log('All studioV2 tests passed!');
+}
+
+runAsyncTests().catch((err) => {
+  console.error('studioV2 tests FAILED:', err);
+  process.exit(1);
+});

@@ -68,7 +68,7 @@ import { downloadPdf } from '../utils/pdfExport';
 import { downloadPptx } from '../utils/pptxExport';
 import { DEFAULT_VISUAL_PREFERENCES, hasAnyVisualElementEnabled } from '../utils/visualRenderer';
 import { BILLING_ENABLED, can, getPlanDisplayName } from '../lib/plans';
-import { STUDIO_DOWNLOAD_NOTICE } from '../lib/studioV2';
+import { canMountStudioEditor, STUDIO_DOWNLOAD_NOTICE } from '../lib/studioV2';
 import KorsIQLogo from './KorsIQLogo';
 import SubscriptionCheckoutModal from './SubscriptionCheckoutModal';
 import StudioVisualDesignPanel from './StudioVisualDesignPanel';
@@ -121,8 +121,27 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   const [checkoutPlan, setCheckoutPlan] = useState<'plus' | 'studio'>('studio');
 
   // Studio Document State
+  const activeDocStorageKey = userId ? `scolaris_studio_active_doc_${userId}` : '';
   const [documents, setDocuments] = useState<AcademicDocument[]>([]);
-  const [activeDocId, setActiveDocId] = useState<string | null>(null);
+  const [activeDocId, setActiveDocIdState] = useState<string | null>(() => {
+    if (typeof window === 'undefined' || !userId) return null;
+    try {
+      return sessionStorage.getItem(`scolaris_studio_active_doc_${userId}`) || null;
+    } catch {
+      return null;
+    }
+  });
+  const setActiveDocId = (id: string | null) => {
+    setActiveDocIdState(id);
+    if (typeof window !== 'undefined' && activeDocStorageKey) {
+      try {
+        if (id) sessionStorage.setItem(activeDocStorageKey, id);
+        else sessionStorage.removeItem(activeDocStorageKey);
+      } catch {
+        // Non-blocking
+      }
+    }
+  };
   const [isLoadingDocs, setIsLoadingDocs] = useState(true);
   const [searchQuery, setSearchQuery] = useState('');
   const [typeFilter, setTypeFilter] = useState<string>('all');
@@ -183,16 +202,68 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   const [isStartingV2Job, setIsStartingV2Job] = useState(false);
   const [v2JobStartError, setV2JobStartError] = useState<string | null>(null);
   const [studioJobs, setStudioJobs] = useState<StudioJob[]>([]);
+  const [isLoadingJobs, setIsLoadingJobs] = useState(true);
   const [userFiles, setUserFiles] = useState<UserFile[]>([]);
   const [activeVariant, setActiveVariant] = useState<'primary' | 'document' | 'slides'>('primary');
   const previousJobStatusRef = useRef<Record<string, string>>({});
+  const tickInFlightRef = useRef(false);
 
-  // Load jobs, user files, and re-kick any stalled jobs on Studio open
+  const hasActiveStudioJob = useMemo(
+    () => studioJobs.some((j) => j.status === 'queued' || j.status === 'running'),
+    [studioJobs]
+  );
+
+  const editorGate = useMemo(
+    () => canMountStudioEditor(activeDocument, studioJobs, isLoadingJobs),
+    [activeDocument, studioJobs, isLoadingJobs]
+  );
+
+  const applyServerDocPatch = (docRow: any) => {
+    if (!docRow || !docRow.id) return;
+    setDocuments((prev) =>
+      prev.map((d) =>
+        d.id === docRow.id
+          ? {
+              ...d,
+              status: docRow.status ?? d.status,
+              sections: Array.isArray(docRow.sections) ? docRow.sections : d.sections,
+              references: Array.isArray(docRow.references) ? docRow.references : d.references,
+              contentBlocks: Array.isArray(docRow.content_blocks) ? docRow.content_blocks : d.contentBlocks,
+              convertedVariants: docRow.converted_variants ?? d.convertedVariants,
+              metadata: docRow.metadata ?? d.metadata,
+              sourceCount: typeof docRow.source_count === 'number' ? docRow.source_count : d.sourceCount,
+              currentWordCount: typeof docRow.current_word_count === 'number' ? docRow.current_word_count : d.currentWordCount,
+            }
+          : d
+      )
+    );
+  };
+
+  // Load jobs, user files, and reliably drive any queued/stalled active job step-by-step
   const refreshStudioV2Jobs = async () => {
     try {
       const res = await GeminiService.getStudioV2Jobs();
-      const jobs: StudioJob[] = res.jobs || [];
+      let jobs: StudioJob[] = res.jobs || [];
       setStudioJobs(jobs);
+      setIsLoadingJobs(false);
+
+      // Drive active job via /tick so steps advance reliably even if serverless loopback HTTP fails
+      const activeJob = jobs.find((j) => j.status === 'queued' || j.status === 'running');
+      if (activeJob && !tickInFlightRef.current) {
+        tickInFlightRef.current = true;
+        try {
+          const tick = await GeminiService.tickStudioV2Job(activeJob.id).catch(() => null);
+          if (tick?.job) {
+            jobs = jobs.map((j) => (j.id === tick.job.id ? tick.job : j));
+            setStudioJobs(jobs);
+          }
+          if (tick?.document) {
+            applyServerDocPatch(tick.document);
+          }
+        } finally {
+          tickInFlightRef.current = false;
+        }
+      }
 
       let anyTransitioned = false;
       for (const j of jobs) {
@@ -201,61 +272,42 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           anyTransitioned = true;
           if (j.status === 'completed' || j.status === 'completed_with_issues') {
             addNotification?.('content', 'Document ready', 'Your Academic Studio document finished generating.', 'studio');
-            showToast('Your document is ready to download.');
+            showToast('Your document is ready to preview and download.');
           } else if (j.status === 'failed') {
             addNotification?.('content', 'Generation failed', j.error || 'Background generation failed.', 'studio');
-            showToast('Document generation failed.');
+            showToast('Document generation failed. You can retry without losing saved sections.');
           } else if (j.status === 'cancelled') {
-            showToast('Generation cancelled. Partial draft saved.');
+            showToast('Generation cancelled. Saved progress preserved.');
           }
         }
         previousJobStatusRef.current[j.id] = j.status;
       }
 
       if (anyTransitioned && userId) {
-        const docs = await DBService.getAcademicDocuments(userId);
+        const docs = await DBService.getAcademicDocuments(userId, true);
         setDocuments(docs);
-      } else {
-        // Refresh progressive drafted sections for any currently active job
-        const activeJob = jobs.find((j) => j.status === 'queued' || j.status === 'running');
-        if (activeJob) {
-          const detail = await GeminiService.getStudioV2Job(activeJob.id).catch(() => null);
-          if (detail?.document?.sections && Array.isArray(detail.document.sections)) {
-            setDocuments((prev) =>
-              prev.map((d) =>
-                d.id === activeJob.documentId
-                  ? {
-                      ...d,
-                      sections: detail.document.sections,
-                      currentWordCount: detail.document.current_word_count ?? d.currentWordCount,
-                    }
-                  : d
-              )
-            );
-          }
-        }
       }
     } catch {
-      // Non-blocking
+      setIsLoadingJobs(false);
     }
   };
 
   useEffect(() => {
     if (!userId) return;
+    setIsLoadingJobs(true);
     GeminiService.reKickStudioV2Jobs().catch(() => {});
     refreshStudioV2Jobs();
     DBService.getUserFiles(userId).then(setUserFiles).catch(() => {});
   }, [userId]);
 
-  // Poll active background jobs while any job is queued/running
+  // Poll active background jobs while any job is queued/running (stable boolean dependency)
   useEffect(() => {
-    const hasActive = studioJobs.some((j) => j.status === 'queued' || j.status === 'running');
-    if (!hasActive) return;
+    if (!hasActiveStudioJob || !userId) return;
     const timer = window.setInterval(() => {
       refreshStudioV2Jobs();
-    }, 3500);
+    }, 3000);
     return () => window.clearInterval(timer);
-  }, [studioJobs, userId]);
+  }, [hasActiveStudioJob, userId]);
 
   const handleV2DraftOutline = async (brief: StudioBrief) => {
     setIsDraftingV2Outline(true);
@@ -272,7 +324,13 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   };
 
   const handleV2StartJob = async () => {
-    if (!v2Brief || v2Outline.length === 0) return;
+    if (!v2Brief || v2Outline.length === 0 || isStartingV2Job) return;
+    if (hasActiveStudioJob) {
+      const msg = 'You already have a document generating. Wait for it to finish or cancel it first.';
+      setV2JobStartError(msg);
+      showToast(msg);
+      return;
+    }
     setIsStartingV2Job(true);
     setV2JobStartError(null);
     try {
@@ -284,9 +342,16 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
         previousJobStatusRef.current[res.job.id] = res.job.status;
         setStudioJobs((prev) => [res.job, ...prev.filter((j) => j.id !== res.job.id)]);
       }
-      const docs = await DBService.getAcademicDocuments(userId);
+      const docs = await DBService.getAcademicDocuments(userId, true);
       setDocuments(docs);
-      showToast('Generation started in the background.');
+      if (res.documentId) {
+        setActiveVariant('primary');
+        setActiveDocId(res.documentId);
+      }
+      showToast('Generation started.');
+      window.setTimeout(() => {
+        refreshStudioV2Jobs();
+      }, 250);
     } catch (err: any) {
       const msg = err?.message || 'Could not start generation.';
       setV2JobStartError(msg);
@@ -316,6 +381,9 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
         setStudioJobs((prev) => prev.map((j) => (j.id === jobId ? res.job : j)));
       }
       showToast('Resuming generation...');
+      window.setTimeout(() => {
+        refreshStudioV2Jobs();
+      }, 250);
     } catch (err: any) {
       showToast(err?.message || 'Could not resume job.');
     }
@@ -1298,8 +1366,13 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
             setV2View('brief');
           }}
           onGenerate={handleV2StartJob}
-          isStartingJob={isStartingV2Job}
-          errorMessage={v2JobStartError}
+          isStartingJob={isStartingV2Job || hasActiveStudioJob}
+          errorMessage={
+            v2JobStartError ||
+            (hasActiveStudioJob
+              ? 'You already have a document generating. Wait for it to finish or cancel it before starting another.'
+              : null)
+          }
         />
       )}
 
@@ -1343,6 +1416,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     job={job}
                     documentTitle={jobDoc?.title}
                     draftedSections={jobDoc?.sections}
+                    retrievalWarnings={(jobDoc?.metadata as any)?.retrievalWarnings}
                     onCancel={handleV2CancelJob}
                     onResume={handleV2ResumeJob}
                     onDeleteDocument={handleDeleteDocument}
@@ -1687,11 +1761,101 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
       )}
 
       {/* ========================================================= */}
-      {/* VIEW 3: 3-COLUMN ACADEMIC WRITING WORKSPACE               */}
-      {/* (When status === 'outline_approved' | 'drafting' | ...)    */}
+      {/* VIEW 3A: ACTIVE / FAILED / CANCELLED GENERATION VIEW      */}
+      {/* Editor, toolbar, save & export controls are NOT mounted   */}
+      {/* until the job completes and persisted content is verified */}
       {/* ========================================================= */}
-      {activeDocument && activeDocument.status !== 'planning' && (
-        <div className="space-y-4">
+      {activeDocument && activeDocument.status !== 'planning' && !editorGate.canMountEditor && (
+        <div
+          className="max-w-3xl mx-auto space-y-4"
+          data-studio-view={editorGate.mode}
+        >
+          <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg px-4 py-3 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3 min-w-0">
+              <button
+                type="button"
+                onClick={() => setActiveDocId(null)}
+                className="p-2 text-[#5B6472] hover:text-[#111827] dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
+                title="Back to Documents"
+                aria-label="Back to Documents"
+              >
+                <ArrowLeft size={16} />
+              </button>
+              <div className="min-w-0">
+                <h2 className="font-bold text-sm text-[#111827] dark:text-white truncate max-w-xs sm:max-w-md">
+                  {activeDocument.title}
+                </h2>
+                <p className="text-[11px] text-[#5B6472] dark:text-slate-400">
+                  {editorGate.mode === 'generating'
+                    ? 'Generating document...'
+                    : editorGate.mode === 'loading'
+                    ? 'Checking generation status...'
+                    : editorGate.mode === 'failed'
+                    ? 'Generation did not complete'
+                    : 'Generation cancelled'}
+                </p>
+              </div>
+            </div>
+          </div>
+
+          {editorGate.mode === 'loading' ? (
+            <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg p-6">
+              <AILiveStatus
+                title="Checking generation status"
+                statusText="Loading active job progress..."
+                state="active"
+                className="border-0 p-0 bg-transparent"
+              />
+            </div>
+          ) : editorGate.relevantJob ? (
+            <StudioJobProgress
+              job={editorGate.relevantJob}
+              documentTitle={activeDocument.title}
+              draftedSections={activeDocument.sections}
+              retrievalWarnings={(activeDocument.metadata as any)?.retrievalWarnings}
+              showOpenButton={false}
+              onCancel={handleV2CancelJob}
+              onResume={handleV2ResumeJob}
+              onDeleteDocument={handleDeleteDocument}
+              onOpenDocument={(id) => setActiveDocId(id)}
+            />
+          ) : (
+            <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg p-5 space-y-3">
+              <AILiveStatus
+                title={
+                  editorGate.mode === 'generating'
+                    ? `Preparing "${activeDocument.title}"`
+                    : 'Generation stopped before completion'
+                }
+                statusText={
+                  editorGate.mode === 'generating'
+                    ? 'Initializing generation pipeline...'
+                    : 'No completed document content is available yet.'
+                }
+                state={editorGate.mode === 'generating' ? 'active' : 'error'}
+                className="border-0 p-0 bg-transparent"
+              />
+              <div className="flex items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setActiveDocId(null)}
+                  className="px-3.5 py-2 border border-[#E5E7EB] dark:border-slate-700 rounded-lg text-xs font-medium text-[#111827] dark:text-slate-200 min-h-[44px] cursor-pointer"
+                >
+                  Back to Documents
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ========================================================= */}
+      {/* VIEW 3B: 3-COLUMN ACADEMIC WRITING WORKSPACE              */}
+      {/* Mounted ONLY when verified completed with persisted text  */}
+      {/* (or legacy v1 document without a V2 generation job)       */}
+      {/* ========================================================= */}
+      {activeDocument && activeDocument.status !== 'planning' && editorGate.canMountEditor && (
+        <div className="space-y-4" data-studio-view="editor">
           {/* Top Control Bar per Spec: Title, Saved State, Undo/Redo, Export */}
           <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-xs">
             <div className="flex items-center gap-3 min-w-0">
@@ -1832,23 +1996,6 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
               </button>
             </div>
           </div>
-
-          {/* Active job progress row if this document has a running/queued/cancelled job */}
-          {studioJobs
-            .filter((j) => j.documentId === activeDocument.id && j.status !== 'completed')
-            .slice(0, 1)
-            .map((job) => (
-              <StudioJobProgress
-                key={job.id}
-                job={job}
-                documentTitle={activeDocument.title}
-                draftedSections={activeDocument.sections}
-                onCancel={handleV2CancelJob}
-                onResume={handleV2ResumeJob}
-                onDeleteDocument={handleDeleteDocument}
-                onOpenDocument={(id) => setActiveDocId(id)}
-              />
-            ))}
 
           {/* Plain source count & integrity notice */}
           <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-[#5B6472] dark:text-slate-400">
@@ -2830,7 +2977,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
       {/* ========================================================= */}
       {/* MODAL 3: EXPORT & PRINT PREVIEW MODAL                     */}
       {/* ========================================================= */}
-      {showExportModal && activeDocument && (
+      {showExportModal && activeDocument && editorGate.canMountEditor && (
         <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl max-w-4xl w-full p-6 space-y-5 shadow-xl max-h-[92vh] overflow-y-auto">
             <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">

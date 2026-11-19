@@ -205,7 +205,50 @@ export function validateExtractedText(text: string, fileTypeHint?: string): Vali
   return { isValid: true };
 }
 
+export interface ProcessDocumentOptions {
+  timeoutMs?: number;
+}
+
+async function runWithTimeout<T>(promise: Promise<T>, timeoutMs: number, label: string): Promise<T> {
+  if (!Number.isFinite(timeoutMs) || timeoutMs <= 0) return promise;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => {
+      reject(new Error(`${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
+  });
+  try {
+    return await Promise.race([promise, timeoutPromise]);
+  } finally {
+    if (timer) clearTimeout(timer);
+  }
+}
+
 export async function processDocumentBuffer(
+  buffer: Buffer,
+  fileName: string,
+  fileType: string,
+  options?: ProcessDocumentOptions
+): Promise<ExtractionResult> {
+  const timeoutMs = options?.timeoutMs ?? 15_000;
+  try {
+    return await runWithTimeout(
+      processDocumentBufferInternal(buffer, fileName, fileType),
+      timeoutMs,
+      `Document extraction (${fileName || 'file'})`
+    );
+  } catch (err: any) {
+    console.warn(`[documentProcessor] Extraction aborted for ${fileName}:`, err?.message || err);
+    return {
+      success: false,
+      extractedText: '',
+      error: err?.message || `Timed out extracting text from ${fileName}.`,
+      fileTypeDetected: (fileName || '').toLowerCase().endsWith('.pdf') ? 'pdf' : 'unknown',
+    };
+  }
+}
+
+async function processDocumentBufferInternal(
   buffer: Buffer,
   fileName: string,
   fileType: string
@@ -252,24 +295,40 @@ export async function processDocumentBuffer(
         }
 
         if (typeof ParserClass === 'function') {
+          let parser: any = null;
+          let instantiated = false;
           try {
-            const parser = new ParserClass({ data: new Uint8Array(buffer) });
+            parser = new ParserClass({ data: new Uint8Array(buffer) });
+            instantiated = true;
             if (parser && typeof parser.getText === 'function') {
               const textResult = await parser.getText();
-              rawExtracted = textResult.text || '';
-              pageCount = textResult.pages?.length || textResult.total;
+              rawExtracted = textResult?.text || '';
+              pageCount = textResult?.pages?.length || textResult?.total;
               parsedOk = true;
-              if (typeof parser.destroy === 'function') {
-                await parser.destroy();
-              }
             }
-          } catch (classErr) {
-            // If instantiation fails, try function call (v1 style)
-            const fnResult = await ParserClass(buffer);
-            if (fnResult && typeof fnResult.text === 'string') {
-              rawExtracted = fnResult.text;
-              pageCount = fnResult.numpages;
-              parsedOk = true;
+          } catch (classErr: any) {
+            // Only fall back to v1 function-call style if `new ParserClass(...)` itself failed to instantiate
+            if (!instantiated) {
+              try {
+                const fnResult = await ParserClass(buffer);
+                if (fnResult && typeof fnResult.text === 'string') {
+                  rawExtracted = fnResult.text;
+                  pageCount = fnResult.numpages;
+                  parsedOk = true;
+                }
+              } catch (fnErr: any) {
+                console.warn('[documentProcessor] PDFParse v1 fallback failed:', fnErr?.message || fnErr);
+              }
+            } else {
+              console.warn('[documentProcessor] PDFParse getText failed:', classErr?.message || classErr);
+            }
+          } finally {
+            if (parser && typeof parser.destroy === 'function') {
+              try {
+                await parser.destroy();
+              } catch {
+                // Ignore cleanup error
+              }
             }
           }
         }
@@ -489,6 +548,8 @@ export async function ocrMediaWithGemini(
   const base64Data = buffer.toString('base64');
 
   for (const model of candidateModels) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error('Gemini OCR timed out')), 20_000);
     try {
       const response = await ai.models.generateContent({
         model,
@@ -498,12 +559,14 @@ export async function ocrMediaWithGemini(
             'Include all course codes, course titles, headings, body text, numbers, scores, grades, and handwritten text. Do not summarize, translate, or add commentary. ' +
             'Where there is a diagram or image with no text, write [diagram]. Output plain text only.'
         ],
-        config: { temperature: 0 }
+        config: { temperature: 0, abortSignal: controller.signal } as any
       });
       const text = normalizeExtractedText(response.text || '');
       if (text) return text;
     } catch (err: any) {
       console.warn(`[documentProcessor OCR] Gemini model ${model} failed:`, err?.message || err);
+    } finally {
+      clearTimeout(timer);
     }
   }
   return '';
