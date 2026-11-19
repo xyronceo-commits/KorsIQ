@@ -38,13 +38,16 @@ import {
   Zap,
   Bookmark,
   Crown,
-  ListOrdered
+  ListOrdered,
+  LayoutTemplate
 } from 'lucide-react';
 import {
   AcademicDocument,
   AcademicDocumentType,
   CitationStyle,
   Course,
+  DocumentTemplateId,
+  SlideTemplateId,
   StudioBrief,
   StudioDocumentStatus,
   StudioFileFormat,
@@ -69,6 +72,14 @@ import { downloadPptx } from '../utils/pptxExport';
 import { DEFAULT_VISUAL_PREFERENCES, hasAnyVisualElementEnabled } from '../utils/visualRenderer';
 import { BILLING_ENABLED, can, getPlanDisplayName } from '../lib/plans';
 import { canMountStudioEditor, STUDIO_DOWNLOAD_NOTICE } from '../lib/studioV2';
+import {
+  documentTemplateToLegacyStyle,
+  documentTemplateToVisualPalette,
+  getDocumentTemplateForDoc,
+  getSlideTemplateForDoc,
+  isSlideDocument,
+  slideTemplateToVisualPalette,
+} from '../lib/studioTemplates';
 import KorsIQLogo from './KorsIQLogo';
 import SubscriptionCheckoutModal from './SubscriptionCheckoutModal';
 import StudioVisualDesignPanel from './StudioVisualDesignPanel';
@@ -76,6 +87,7 @@ import StudioVisualCard from './StudioVisualCard';
 import StudioBriefForm from './StudioBriefForm';
 import StudioOutlineReview from './StudioOutlineReview';
 import StudioJobProgress from './StudioJobProgress';
+import { StudioTemplateModal } from './StudioTemplatePicker';
 import { AILiveStatus } from './AILiveStatus';
 
 interface AcademicStudioProps {
@@ -389,7 +401,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     }
   };
 
-  const handleV2Download = async () => {
+  const handleV2Download = async (formatOverride?: StudioFileFormat) => {
     if (!activeDocument) return;
     const variant =
       activeVariant !== 'primary' ? activeDocument.convertedVariants?.[activeVariant] : undefined;
@@ -401,7 +413,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           contentBlocks: variant.contentBlocks,
         }
       : activeDocument;
-    const fmt: StudioFileFormat = targetDoc.fileFormat || (targetDoc.metadata?.preferredFormat as StudioFileFormat) || 'docx';
+    const fmt: StudioFileFormat =
+      formatOverride || targetDoc.fileFormat || (targetDoc.metadata?.preferredFormat as StudioFileFormat) || 'docx';
     const safeTitle = (targetDoc.title || 'document').replace(/[^a-zA-Z0-9_-]/g, '_');
 
     try {
@@ -417,6 +430,48 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     } catch {
       showToast('Download failed. Please try again.');
     }
+  };
+
+  /**
+   * Switch visual template post-generation with 0 AI calls and 0 credits.
+   * Content stays decoupled from styling and re-exports immediately with the chosen template.
+   */
+  const handleSwitchTemplateFree = async (chosenId: DocumentTemplateId | SlideTemplateId) => {
+    if (!activeDocument) return;
+    const activeIsSlides =
+      activeVariant === 'slides' ||
+      (activeVariant === 'primary' && isSlideDocument(activeDocument));
+
+    const updatedMetadata = {
+      ...(activeDocument.metadata || {}),
+      ...(activeIsSlides
+        ? { slideTemplateId: chosenId as SlideTemplateId }
+        : { documentTemplateId: chosenId as DocumentTemplateId }),
+    };
+
+    const updatedBrief = activeDocument.brief
+      ? {
+          ...activeDocument.brief,
+          ...(activeIsSlides
+            ? { slideTemplateId: chosenId as SlideTemplateId }
+            : {
+                documentTemplateId: chosenId as DocumentTemplateId,
+                documentStyle: documentTemplateToLegacyStyle(chosenId as DocumentTemplateId),
+              }),
+        }
+      : activeDocument.brief;
+
+    const updatedDoc: AcademicDocument = {
+      ...activeDocument,
+      metadata: updatedMetadata,
+      brief: updatedBrief,
+    };
+
+    await persistDocument(updatedDoc);
+    const tplName = activeIsSlides
+      ? getSlideTemplateForDoc(updatedDoc).name
+      : getDocumentTemplateForDoc(updatedDoc).name;
+    showToast(`Template switched to ${tplName} (0 credits used).`);
   };
 
   const handleV2SwitchFormat = async (target: 'docx' | 'pdf' | 'convert_to_slides' | 'convert_to_document') => {
@@ -449,6 +504,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
 
   // Preview & Export Modal State
   const [showExportModal, setShowExportModal] = useState(false);
+  const [showTemplateSwitchModal, setShowTemplateSwitchModal] = useState(false);
   const [isExportingDocx, setIsExportingDocx] = useState(false);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [isExportingPptx, setIsExportingPptx] = useState(false);
@@ -1361,6 +1417,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           brief={v2Brief}
           outline={v2Outline}
           onChangeOutline={setV2Outline}
+          onChangeBrief={setV2Brief}
           onBackToBrief={() => {
             setV2JobStartError(null);
             setV2View('brief');
@@ -1950,7 +2007,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                 </div>
               )}
 
-              {/* Switch Format: Instant Word<->PDF (0 AI calls) or Background Convert */}
+              {/* Switch Format & Template (Free Switch — 0 credits) */}
               {(() => {
                 const currentFmt =
                   activeVariant === 'slides'
@@ -1958,8 +2015,25 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     : activeVariant === 'document'
                     ? 'docx'
                     : activeDocument.fileFormat || (activeDocument.metadata?.preferredFormat as StudioFileFormat) || 'docx';
+                const activeIsSlides = currentFmt === 'pptx' || activeDocument.docType === 'presentation';
+                const activeTplName = activeIsSlides
+                  ? getSlideTemplateForDoc(activeDocument).name
+                  : getDocumentTemplateForDoc(activeDocument).name;
                 return (
                   <div className="flex flex-wrap items-center gap-1.5">
+                    <button
+                      type="button"
+                      data-template-free-switch="true"
+                      onClick={() => setShowTemplateSwitchModal(true)}
+                      title="Switch visual template anytime with 0 credits and re-export immediately."
+                      className="inline-flex items-center gap-1.5 px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-[#111827] dark:text-white rounded-lg text-xs font-medium min-h-[44px] cursor-pointer"
+                    >
+                      <LayoutTemplate size={14} className="text-[#2563EB]" />
+                      <span className="max-w-[160px] truncate">Template: {activeTplName}</span>
+                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[#EFF6FF] dark:bg-blue-950/60 text-[#2563EB] dark:text-blue-300">
+                        Free Switch
+                      </span>
+                    </button>
                     {currentFmt !== 'pptx' && (
                       <button
                         type="button"
@@ -1967,6 +2041,15 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                         className="px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-[#111827] dark:text-white rounded-lg text-xs font-medium min-h-[44px] cursor-pointer"
                       >
                         Switch to {currentFmt === 'docx' ? '.pdf' : '.docx'}
+                      </button>
+                    )}
+                    {currentFmt === 'pptx' && (
+                      <button
+                        type="button"
+                        onClick={() => handleV2Download('pdf')}
+                        className="px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-[#111827] dark:text-white rounded-lg text-xs font-medium min-h-[44px] cursor-pointer"
+                      >
+                        Export .pdf
                       </button>
                     )}
                     <button
@@ -1983,10 +2066,10 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                 );
               })()}
 
-              {/* Single Download Button (no export menu, no sharing) */}
+              {/* Primary Download Button */}
               <button
                 type="button"
-                onClick={handleV2Download}
+                onClick={() => handleV2Download()}
                 className="px-4 py-2 bg-[#2563EB] hover:bg-[#1746A2] text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer min-h-[44px]"
               >
                 <Download size={14} />
@@ -1996,6 +2079,38 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
               </button>
             </div>
           </div>
+
+          {/* Post-generation Template Switch Modal (0 credits — mounted strictly inside View 3B) */}
+          {(() => {
+            const activeIsSlides =
+              activeVariant === 'slides' ||
+              (activeVariant === 'primary' && isSlideDocument(activeDocument));
+            const currentTplId = activeIsSlides
+              ? getSlideTemplateForDoc(activeDocument).id
+              : getDocumentTemplateForDoc(activeDocument).id;
+            return (
+              <StudioTemplateModal
+                isOpen={showTemplateSwitchModal}
+                mode={activeIsSlides ? 'slide' : 'document'}
+                initialTemplateId={currentTplId}
+                onClose={() => setShowTemplateSwitchModal(false)}
+                onConfirm={handleSwitchTemplateFree}
+                sample={{
+                  title: activeDocument.title,
+                  courseCode: activeDocument.metadata?.courseCode || activeDocument.brief?.courseCode,
+                  courseTitle: activeDocument.metadata?.courseTitle || activeDocument.brief?.courseTitle,
+                  studentName: activeDocument.metadata?.studentName || activeDocument.brief?.studentName,
+                  institution: activeDocument.metadata?.institution || activeDocument.brief?.institution,
+                  date: activeDocument.metadata?.submissionDate || activeDocument.brief?.date,
+                }}
+                titleLabel={
+                  activeIsSlides
+                    ? 'Switch Slide Template (Free — 0 Credits)'
+                    : 'Switch Document Template (Free — 0 Credits)'
+                }
+              />
+            );
+          })()}
 
           {/* Plain source count & integrity notice */}
           <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-[#5B6472] dark:text-slate-400">
@@ -2127,7 +2242,28 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                   );
                 })()}
 
-                {/* Editor Textarea (Clean Paper Canvas) */}
+                {/* Editor Textarea (Live Template Styled Canvas) */}
+                {(() => {
+                  const activeIsSlides =
+                    activeVariant === 'slides' ||
+                    (activeVariant === 'primary' && isSlideDocument(activeDocument));
+                  const docTpl = !activeIsSlides ? getDocumentTemplateForDoc(activeDocument) : null;
+                  const slideTpl = activeIsSlides ? getSlideTemplateForDoc(activeDocument) : null;
+                  const canvasStyle: React.CSSProperties = activeIsSlides
+                    ? {
+                        backgroundColor: slideTpl!.colors.bg,
+                        color: slideTpl!.colors.body,
+                        borderColor: slideTpl!.colors.border,
+                        fontFamily: slideTpl!.fonts.bodyCss,
+                      }
+                    : {
+                        backgroundColor: docTpl!.colors.pageBg,
+                        color: docTpl!.colors.text,
+                        borderColor: docTpl!.colors.border === '#000000' ? '#D1D5DB' : docTpl!.colors.border,
+                        fontFamily: docTpl!.fonts.bodyCss,
+                        lineHeight: docTpl!.lineSpacing,
+                      };
+                  return (
                 <div className="flex-1 flex flex-col relative">
                   <textarea
                     value={editorText}
@@ -2141,7 +2277,9 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                       }
                     }}
                     placeholder="Start writing, or ask for a suggested draft."
-                    className="w-full flex-1 min-h-[380px] p-4 bg-white dark:bg-slate-950 border border-[#E5E7EB] dark:border-slate-800 rounded-lg font-sans text-sm leading-relaxed text-[#111827] dark:text-slate-100 outline-none focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] transition-colors resize-none"
+                    data-active-template-id={activeIsSlides ? slideTpl!.id : docTpl!.id}
+                    style={canvasStyle}
+                    className="w-full flex-1 min-h-[380px] p-4 border rounded-lg text-sm outline-none focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] transition-colors resize-none"
                   />
 
                   {/* Selected Text Floating Helper */}
@@ -2168,6 +2306,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     </div>
                   )}
                 </div>
+                  );
+                })()}
 
                 {/* Editor Footer Status */}
                 <div className="flex items-center justify-between text-xs text-[#5B6472] pt-2 border-t border-[#E5E7EB] dark:border-slate-800">
@@ -2181,6 +2321,12 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                 {(() => {
                   const curSec = activeDocument.sections.find((s) => s.id === activeSectionId);
                   if (!curSec?.visuals || curSec.visuals.length === 0) return null;
+                  const activeIsSlides =
+                    activeVariant === 'slides' ||
+                    (activeVariant === 'primary' && isSlideDocument(activeDocument));
+                  const visualPalette = activeIsSlides
+                    ? slideTemplateToVisualPalette(getSlideTemplateForDoc(activeDocument))
+                    : documentTemplateToVisualPalette(getDocumentTemplateForDoc(activeDocument));
                   return (
                     <div className="pt-3 border-t border-[#E5E7EB] dark:border-slate-800 space-y-2">
                       <p className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider">
@@ -2191,6 +2337,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                           key={vis.id}
                           block={vis}
                           designStyle={activeDocument.metadata?.visualPreferences?.designStyle}
+                          palette={visualPalette}
                           onRemove={() => handleRemoveSectionVisual(curSec.id, vis.id)}
                         />
                       ))}

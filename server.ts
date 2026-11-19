@@ -4601,6 +4601,8 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
           includeTableOfContents: true,
           includeReferences: true,
           preferredFormat: brief.fileFormat || 'docx',
+          documentTemplateId: brief.documentTemplateId || undefined,
+          slideTemplateId: brief.slideTemplateId || undefined,
           visualPreferences: {
             customized: true,
             designStyle: brief.documentStyle === 'modern_clean' ? 'modern_professional' : 'classic_academic',

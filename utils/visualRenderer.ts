@@ -3,6 +3,7 @@ import {
   StudioVisualBlock,
   StudioVisualPreferences,
 } from '../types';
+import { TemplateVisualPalette } from '../lib/studioTemplates';
 
 export const DEFAULT_VISUAL_PREFERENCES: StudioVisualPreferences = {
   customized: false,
@@ -124,11 +125,13 @@ function drawRoundedRect(
  */
 export function renderVisualBlockToPng(
   block: StudioVisualBlock,
-  designStyle?: StudioDesignStyle
+  designStyle?: StudioDesignStyle,
+  customPalette?: Partial<TemplateVisualPalette>
 ): { dataUrl: string; width: number; height: number } | null {
   if (typeof document === 'undefined') return null;
 
-  const palette = getDesignStylePalette(designStyle);
+  const basePalette = getDesignStylePalette(designStyle);
+  const palette = customPalette ? { ...basePalette, ...customPalette } : basePalette;
   const logicalWidth = 700;
   const padding = 24;
   const contentWidth = logicalWidth - padding * 2;
@@ -428,9 +431,9 @@ export function renderVisualBlockToPng(
       const maxL = Math.max(1, ...wrapped.map((w) => w.length));
       const rowH = maxL * 15 + 14;
 
-      ctx.fillStyle = rIdx % 2 === 0 ? '#FFFFFF' : '#F8FAFC';
+      ctx.fillStyle = rIdx % 2 === 0 ? palette.surface : palette.primarySoft;
       ctx.fillRect(padding, ty, contentWidth, rowH);
-      ctx.strokeStyle = '#E2E8F0';
+      ctx.strokeStyle = palette.border;
       ctx.lineWidth = 1;
       ctx.strokeRect(padding, ty, contentWidth, rowH);
 
