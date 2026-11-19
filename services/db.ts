@@ -3034,7 +3034,10 @@ export const DBService = {
   // KORSIQ ACADEMIC STUDIO
   // ==========================================
 
-  async getAcademicDocuments(userId: string): Promise<AcademicDocument[]> {
+  async getAcademicDocuments(userId: string, forceRefresh = false): Promise<AcademicDocument[]> {
+    if (forceRefresh) {
+      invalidateShortTtl(`academic_docs:${userId}`);
+    }
     return withShortTtl(`academic_docs:${userId}`, async () => {
     try {
       const cached = readCache<AcademicDocument[]>('academic_docs', userId, []);

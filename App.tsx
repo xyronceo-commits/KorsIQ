@@ -10,6 +10,7 @@ import type { Session } from '@supabase/supabase-js';
 import { supabase, toAuthUser, setCurrentUserId, getAccessToken, type AuthUser } from './lib/supabase';
 import { DBService } from './services/db';
 import { cleanupLegacyApiKeyStorage, GeminiService } from './services/gemini';
+import { applyPageSeo, CANONICAL_ORIGIN, PUBLIC_HOME_SEO } from './lib/seo';
 import KorsIQLogo from './components/KorsIQLogo';
 
 const Onboarding = lazy(() => import('./components/Onboarding'));
@@ -140,6 +141,59 @@ const App: React.FC = () => {
     if (typeof window === 'undefined') return false;
     return window.location.hash.includes('type=recovery') || window.location.search.includes('type=recovery');
   });
+
+  // Dynamic SEO metadata: keep public landing page indexable, mark auth/admin/private workspace noindex
+  useEffect(() => {
+    if (isAdminRoute) {
+      applyPageSeo({
+        title: 'Admin Portal — KorsIQ',
+        description: 'KorsIQ administration console.',
+        canonical: `${CANONICAL_ORIGIN}/admin`,
+        robots: 'noindex, nofollow',
+      });
+      return;
+    }
+
+    if (isPasswordRecovery || (!authUser && showAuth)) {
+      applyPageSeo({
+        title: isPasswordRecovery ? 'Reset Password — KorsIQ' : authMode === 'signup' ? 'Create Account — KorsIQ' : 'Sign In — KorsIQ',
+        description: PUBLIC_HOME_SEO.description,
+        canonical: PUBLIC_HOME_SEO.canonical,
+        robots: 'noindex, nofollow',
+      });
+      return;
+    }
+
+    if (!authUser) {
+      applyPageSeo(PUBLIC_HOME_SEO);
+      return;
+    }
+
+    const tabTitles: Partial<Record<AppState, string>> = {
+      overview: 'Overview — KorsIQ',
+      dashboard: 'Overview — KorsIQ',
+      planner: 'Study Planner — KorsIQ',
+      courses: 'Courses — KorsIQ',
+      calculator: 'CGPA Calculator — KorsIQ',
+      timetable: 'Timetable — KorsIQ',
+      schedule: 'Revision Plan — KorsIQ',
+      hub: 'Study Hub — KorsIQ',
+      circles: 'Study Circles — KorsIQ',
+      groups: 'Study Circles — KorsIQ',
+      studio: 'Academic Studio — KorsIQ',
+      resources: 'Resource Library — KorsIQ',
+      library: 'Resource Library — KorsIQ',
+      settings: 'Settings — KorsIQ',
+      profile: 'Profile — KorsIQ',
+    };
+
+    applyPageSeo({
+      title: profile && !profile.onboarded ? 'Onboarding — KorsIQ' : (tabTitles[activeTab] || 'Workspace — KorsIQ'),
+      description: PUBLIC_HOME_SEO.description,
+      canonical: PUBLIC_HOME_SEO.canonical,
+      robots: 'noindex, nofollow',
+    });
+  }, [isAdminRoute, isPasswordRecovery, authUser, showAuth, authMode, activeTab, profile?.onboarded]);
   const [dbConnected, setDbConnected] = useState<boolean | null>(null);
   const [paymentReturnBanner, setPaymentReturnBanner] = useState<{
     status: 'verifying' | 'success' | 'error';

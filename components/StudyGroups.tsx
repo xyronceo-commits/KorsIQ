@@ -11,6 +11,7 @@ import {
 } from '../types';
 import { checkLimit } from '../lib/plans';
 import { getAccessToken } from '../lib/supabase';
+import { toSafeExternalUrl } from '../lib/urlSafety';
 import { 
   Globe, 
   Lock, 
@@ -1108,7 +1109,12 @@ export const StudyGroups: React.FC<StudyGroupsProps> = ({
                                 const storageKey = (post as any).storagePath || (post as any).s3Key || (keyMatch ? decodeURIComponent(keyMatch[2]) : '');
                                 const bucket = keyMatch ? keyMatch[1] : 'group-materials';
                                 if (!storageKey) {
-                                  window.open(rawUrl, '_blank', 'noopener,noreferrer');
+                                  const safeUrl = toSafeExternalUrl(rawUrl);
+                                  if (safeUrl) {
+                                    window.open(safeUrl, '_blank', 'noopener,noreferrer');
+                                  } else {
+                                    addNotification('message', 'Download blocked', 'Invalid or unsafe file URL.');
+                                  }
                                   return;
                                 }
                                 const res = await fetch('/api/s3/presign', {

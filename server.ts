@@ -402,11 +402,56 @@ export async function createExpressApp() {
   // Security: Restrict CORS to authorized application origins and local dev
   const allowedOrigins = [
     'https://scolaris-aia.vercel.app',
+    'https://korsiq.com.ng',
+    'https://www.korsiq.com.ng',
     'https://korsiq.com',
     'https://www.korsiq.com',
     cleanEnvKey('APP_URL'),
     process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : ''
   ].filter(Boolean) as string[];
+
+  const isAllowedKorsiqHost = (host: string): boolean => {
+    const h = host.toLowerCase();
+    return (
+      h === 'korsiq.com.ng' ||
+      h === 'www.korsiq.com.ng' ||
+      h === 'korsiq.com' ||
+      h === 'www.korsiq.com' ||
+      h.endsWith('.korsiq.com.ng') ||
+      h.endsWith('.korsiq.com') ||
+      /^(scolaris|korsiq)[a-z0-9-]*\.vercel\.app$/i.test(h)
+    );
+  };
+
+  function getRequestBaseUrl(req: express.Request): string {
+    const configuredAppUrl = cleanEnvKey('APP_URL');
+    if (configuredAppUrl && /^https?:\/\//i.test(configuredAppUrl)) {
+      return configuredAppUrl.replace(/\/+$/, '');
+    }
+    const rawHost = ((req.headers['x-forwarded-host'] as string)?.split(',')[0] || req.get('host') || '').trim();
+    const hostOnly = rawHost.replace(/:\d+$/, '');
+    const isLocalHost = /^(localhost|127\.0\.0\.1)(:\d+)?$/i.test(rawHost);
+    if (isLocalHost || isAllowedKorsiqHost(hostOnly)) {
+      const proto = isLocalHost ? 'http' : 'https';
+      return `${proto}://${rawHost}`;
+    }
+    const vercelUrl = cleanEnvKey('VERCEL_URL');
+    if (vercelUrl) {
+      const host = vercelUrl.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
+      return `https://${host}`;
+    }
+    return `http://localhost:${PORT}`;
+  }
+
+  async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs = 15_000): Promise<Response> {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs);
+    try {
+      return await fetch(url, { ...init, signal: controller.signal });
+    } finally {
+      clearTimeout(timer);
+    }
+  }
 
   app.use(cors({
     origin: (origin, callback) => {
@@ -416,14 +461,17 @@ export async function createExpressApp() {
       if (/^https?:\/\/localhost(:\d+)?$/.test(origin) || /^https?:\/\/127\.0\.0\.1(:\d+)?$/.test(origin)) {
         return callback(null, true);
       }
-      // Allow Vercel preview and production deployments
+      // Allow explicitly authorized KorsIQ domains and KorsIQ/Scolaris Vercel previews only
       try {
-        const host = new URL(origin).hostname;
-        if (host.endsWith('.vercel.app') || allowedOrigins.some(o => o.toLowerCase() === origin.toLowerCase())) {
+        const parsed = new URL(origin);
+        if (
+          (parsed.protocol === 'https:' && isAllowedKorsiqHost(parsed.hostname)) ||
+          allowedOrigins.some(o => o.toLowerCase() === origin.toLowerCase())
+        ) {
           return callback(null, true);
         }
       } catch {}
-      // Fallback: allow request but do not reflect unauthorized origin
+      // Reject unauthorized origins
       return callback(null, false);
     },
     credentials: true,
@@ -432,16 +480,20 @@ export async function createExpressApp() {
   }));
 
   // URL normalizer: ensure incoming paths match Express /api routes on all hosting providers
+  // without intercepting SEO deliverables, PWA manifest, or static public assets.
+  const STATIC_PUBLIC_PATH_RE =
+    /^\/(robots\.txt|sitemap\.xml|manifest\.json|og-image\.png|apple-touch-icon\.png|favicon[^/]*|korsiq-logo[^/]*|screenshots\/|assets\/|vite|@vite|@fs|@id|src\/|node_modules\/)/i;
+
   app.use((req, _res, next) => {
+    const pathname = (req.url || '').split('?')[0];
     if (
-      req.url && 
-      !req.url.startsWith('/api') && 
-      !req.url.startsWith('/assets') && 
-      req.url !== '/' && 
-      req.url !== '/index.html' && 
-      !req.url.startsWith('/vite') &&
-      req.url !== '/admin' &&
-      !req.url.startsWith('/admin')
+      req.url &&
+      !pathname.startsWith('/api') &&
+      pathname !== '/' &&
+      pathname !== '/index.html' &&
+      pathname !== '/admin' &&
+      !pathname.startsWith('/admin/') &&
+      !STATIC_PUBLIC_PATH_RE.test(pathname)
     ) {
       req.url = '/api' + (req.url.startsWith('/') ? req.url : '/' + req.url);
     }
@@ -647,6 +699,11 @@ export async function createExpressApp() {
     }
 
     timestamps.push(now);
+    if (userApiRequests.size > 5000) {
+      for (const [k, v] of userApiRequests.entries()) {
+        if (v.every((ts) => now - ts >= windowMs)) userApiRequests.delete(k);
+      }
+    }
     userApiRequests.set(key, timestamps);
     next();
   };
@@ -812,6 +869,12 @@ export async function createExpressApp() {
         continue;
       }
 
+      const fastController = new AbortController();
+      const fastTimeoutMs = 28_000;
+      const fastTimer = setTimeout(() => {
+        fastController.abort(new Error(`Fast model '${model}' timed out after ${fastTimeoutMs}ms`));
+      }, fastTimeoutMs);
+
       try {
         const response = await aiGen.models.generateContent({
           model,
@@ -819,6 +882,7 @@ export async function createExpressApp() {
           config: buildGenerateConfigForAttempt(baseConfig, {
             isHeavyAttempt: false,
             thinkingLevel: 'low',
+            abortSignal: fastController.signal,
           }) as any,
         });
         if (response.text && response.text.trim().length > 0) {
@@ -828,6 +892,8 @@ export async function createExpressApp() {
       } catch (gErr: any) {
         console.warn(`Gemini model '${model}' call warning:`, gErr?.message || gErr);
         lastError = gErr;
+      } finally {
+        clearTimeout(fastTimer);
       }
     }
 
@@ -1148,16 +1214,16 @@ export async function createExpressApp() {
 
       if (ledgerInsertErr) {
         console.error('[Subscription Initialize] Failed to insert payment_transactions row:', ledgerInsertErr);
+        console.error('[Subscription Initialize] Payment ledger insert error:', ledgerInsertErr.message);
         return res.status(500).json({
           success: false,
-          error: `Could not create payment ledger record: ${ledgerInsertErr.message}`
+          error: 'Could not initialize payment record. Please try again.'
         });
       }
 
-      const origin = req.headers.origin || `${req.protocol}://${req.get('host') || 'localhost:3000'}`;
-      const callbackUrl = `${origin.replace(/\/$/, '')}/?payment=return`;
+      const callbackUrl = `${getRequestBaseUrl(req)}/?payment=return`;
 
-      const paystackRes = await fetch('https://api.paystack.co/transaction/initialize', {
+      const paystackRes = await fetchWithTimeout('https://api.paystack.co/transaction/initialize', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${paystackKey}`,
@@ -1177,7 +1243,7 @@ export async function createExpressApp() {
             billingCycle
           }
         })
-      });
+      }, 15_000);
 
       const paystackData = await paystackRes.json();
       if (!paystackRes.ok || !paystackData.status) {
@@ -1209,8 +1275,8 @@ export async function createExpressApp() {
         currency: 'NGN'
       });
     } catch (err: any) {
-      console.error('Initialize subscription error:', err);
-      return res.status(500).json({ success: false, error: err.message || 'Checkout initialization failed' });
+      console.error('Initialize subscription error:', err?.message || err);
+      return res.status(500).json({ success: false, error: 'Checkout initialization failed. Please try again.' });
     }
   });
 
@@ -1313,20 +1379,20 @@ export async function createExpressApp() {
       // Try direct reference verification with Paystack if reference was supplied
       if (cleanRef) {
         try {
-          const verifyRes = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(cleanRef)}`, {
+          const verifyRes = await fetchWithTimeout(`https://api.paystack.co/transaction/verify/${encodeURIComponent(cleanRef)}`, {
             headers: {
               Authorization: `Bearer ${paystackKey}`,
               'Content-Type': 'application/json'
             }
-          });
+          }, 15_000);
           const verifyData = await verifyRes.json();
           if (verifyRes.ok && verifyData.status && verifyData.data) {
             tx = verifyData.data;
           } else if (verifyData?.message) {
             gatewayMessage = verifyData.message;
           }
-        } catch (vErr) {
-          console.warn('Paystack direct verify lookup warning:', vErr);
+        } catch (vErr: any) {
+          console.warn('Paystack direct verify lookup warning:', vErr?.message || vErr);
         }
       }
 
@@ -1334,12 +1400,12 @@ export async function createExpressApp() {
       // look up recent Paystack transactions for this authenticated user's email
       if (!tx && !cleanRef && userEmail) {
         try {
-          const custRes = await fetch(`https://api.paystack.co/transaction?customer=${encodeURIComponent(userEmail)}&perPage=10`, {
+          const custRes = await fetchWithTimeout(`https://api.paystack.co/transaction?customer=${encodeURIComponent(userEmail)}&perPage=10`, {
             headers: {
               Authorization: `Bearer ${paystackKey}`,
               'Content-Type': 'application/json'
             }
-          });
+          }, 15_000);
           const custData = await custRes.json();
           if (custRes.ok && custData.status && Array.isArray(custData.data)) {
             const matchingTx = custData.data.find((t: any) =>
@@ -1534,8 +1600,8 @@ export async function createExpressApp() {
         message: `Payment verified! Your account is now active on ${getPlanDisplayName(planTier)}.`
       });
     } catch (err: any) {
-      console.error('Verify subscription error:', err);
-      return res.status(500).json({ success: false, error: err.message || 'Payment verification failed' });
+      console.error('Verify subscription error:', err?.message || err);
+      return res.status(500).json({ success: false, error: 'Payment verification failed. Please try again.' });
     }
   });
 
@@ -1578,7 +1644,8 @@ export async function createExpressApp() {
         latestSubscription: latestSub || null
       });
     } catch (err: any) {
-      return res.status(500).json({ success: false, error: err.message || 'Failed to fetch subscription status' });
+      console.error('Subscription status error:', err?.message || err);
+      return res.status(500).json({ success: false, error: 'Failed to fetch subscription status.' });
     }
   });
 
@@ -4384,26 +4451,7 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
   // ACADEMIC STUDIO V2: BRIEF -> OUTLINE -> BACKGROUND JOB ENGINE
   // ==========================================
 
-  const getRequestBaseUrl = (req: express.Request): string => {
-    const configuredAppUrl = cleanEnvKey('APP_URL');
-    if (configuredAppUrl && /^https?:\/\//i.test(configuredAppUrl)) {
-      return configuredAppUrl.replace(/\/+$/, '');
-    }
-    const vercelUrl = cleanEnvKey('VERCEL_URL');
-    if (vercelUrl) {
-      const host = vercelUrl.replace(/^https?:\/\//i, '').replace(/\/+$/, '');
-      return `https://${host}`;
-    }
-    const rawHost = ((req.headers['x-forwarded-host'] as string)?.split(',')[0] || req.get('host') || '').trim();
-    const isSafeHost = /^(localhost|127\.0\.0\.1)(:\d+)?$|^[a-z0-9-]+(\.[a-z0-9-]+)*\.(korsiq\.com\.ng|vercel\.app)$/i.test(rawHost);
-    if (isSafeHost) {
-      const proto = rawHost.startsWith('localhost') || rawHost.startsWith('127.0.0.1') ? 'http' : 'https';
-      return `${proto}://${rawHost}`;
-    }
-    return `http://localhost:${PORT}`;
-  };
-
-  app.post('/api/studio/v2/outline', requireAuth, apiRateLimiter, async (req: AuthenticatedRequest, res) => {
+  app.post('/api/studio/v2/outline', requireAuth, requirePaidTier(['plus', 'studio', 'scholar', 'sage']), apiRateLimiter, async (req: AuthenticatedRequest, res) => {
     const brief = req.body?.brief;
     if (!brief || !String(brief.title || '').trim()) {
       return res.status(400).json({ success: false, error: 'Document title is required.' });
@@ -4468,7 +4516,7 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
     }
   });
 
-  app.post('/api/studio/v2/jobs', requireAuth, apiRateLimiter, async (req: AuthenticatedRequest, res) => {
+  app.post('/api/studio/v2/jobs', requireAuth, requirePaidTier(['plus', 'studio', 'scholar', 'sage']), apiRateLimiter, async (req: AuthenticatedRequest, res) => {
     if (!supabaseAdmin) {
       return res.status(503).json({ success: false, error: 'Background jobs require server database configuration.' });
     }
@@ -4609,7 +4657,21 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
       if (jobErr || !jobRow) throw jobErr || new Error('Job creation failed');
 
       const baseUrl = getRequestBaseUrl(req);
-      await triggerStudioStepAsync({ baseUrl, jobId: jobRow.id, stepIndex: 0 });
+      await triggerStudioStepAsync({
+        baseUrl,
+        jobId: jobRow.id,
+        stepIndex: 0,
+        onTriggerFailed: async () => {
+          await executeStudioJobStep({
+            supabaseAdmin,
+            jobId: jobRow.id,
+            stepIndex: 0,
+            runAICall,
+            baseUrl,
+            downloadFileBuffer: downloadStorageBufferForUser,
+          });
+        },
+      });
 
       return res.json({ success: true, job: rowToStudioJob(jobRow), documentId: docId });
     } catch (err: any) {
@@ -4644,8 +4706,68 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
       stepIndex,
       runAICall,
       baseUrl,
+      downloadFileBuffer: downloadStorageBufferForUser,
     });
     return res.json({ success: true, ...result });
+  });
+
+  // Authenticated step-driver endpoint: reliably executes one bounded step in-process when a job
+  // is queued or its lease has expired (eliminates dependency on fragile serverless loopback HTTP).
+  app.post('/api/studio/v2/jobs/:id/tick', requireAuth, async (req: AuthenticatedRequest, res) => {
+    if (!supabaseAdmin) return res.status(503).json({ success: false, error: 'Database unavailable' });
+    const uid = req.user!.uid;
+    const jobId = String(req.params.id || '');
+    const { data: jobRow, error } = await supabaseAdmin
+      .from('studio_jobs')
+      .select('*')
+      .eq('id', jobId)
+      .eq('user_id', uid)
+      .maybeSingle();
+
+    if (error || !jobRow) {
+      return res.status(404).json({ success: false, error: 'Job not found' });
+    }
+
+    let mappedJob = rowToStudioJob(jobRow);
+    let stepResult: { status: string; skipped?: boolean; nextStep?: number; resourceStatus?: string } | null = null;
+
+    if (
+      (mappedJob.status === 'queued' || mappedJob.status === 'running') &&
+      isJobLeaseExpired(mappedJob)
+    ) {
+      stepResult = await executeStudioJobStep({
+        supabaseAdmin,
+        jobId: mappedJob.id,
+        stepIndex: mappedJob.currentStep,
+        runAICall,
+        baseUrl: getRequestBaseUrl(req),
+        downloadFileBuffer: downloadStorageBufferForUser,
+      });
+
+      const { data: refreshedJob } = await supabaseAdmin
+        .from('studio_jobs')
+        .select('*')
+        .eq('id', jobId)
+        .eq('user_id', uid)
+        .maybeSingle();
+      if (refreshedJob) {
+        mappedJob = rowToStudioJob(refreshedJob);
+      }
+    }
+
+    const { data: docRow } = await supabaseAdmin
+      .from('academic_documents')
+      .select('*')
+      .eq('id', mappedJob.documentId)
+      .eq('user_id', uid)
+      .maybeSingle();
+
+    return res.json({
+      success: true,
+      job: mappedJob,
+      document: docRow || null,
+      stepResult,
+    });
   });
 
   app.get('/api/studio/v2/jobs', requireAuth, async (req: AuthenticatedRequest, res) => {
@@ -4750,10 +4872,21 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
       return res.status(400).json({ success: false, error: 'Only cancelled or failed jobs can be resumed.' });
     }
 
+    const currentStepIdx = Number(jobRow.current_step) || 0;
+    const rawPlan = Array.isArray(jobRow.plan) ? jobRow.plan.map((s: any) => ({ ...s })) : [];
+    const resumeStepIdx = Math.min(currentStepIdx, Math.max(0, rawPlan.length - 1));
+    if (rawPlan[resumeStepIdx] && rawPlan[resumeStepIdx].status !== 'completed') {
+      rawPlan[resumeStepIdx].status = 'pending';
+      rawPlan[resumeStepIdx].attempts = 0;
+      delete rawPlan[resumeStepIdx].error;
+    }
+
     const { data: updated, error: upErr } = await supabaseAdmin
       .from('studio_jobs')
       .update({
         status: 'queued',
+        plan: rawPlan,
+        current_step: resumeStepIdx,
         cancel_requested: false,
         lease_until: null,
         error: null,
@@ -4768,10 +4901,22 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
       return res.status(500).json({ success: false, error: 'Could not resume job' });
     }
 
+    const resumeBaseUrl = getRequestBaseUrl(req);
+    const nextIdx = Number(updated.current_step) || 0;
     await triggerStudioStepAsync({
-      baseUrl: getRequestBaseUrl(req),
+      baseUrl: resumeBaseUrl,
       jobId: updated.id,
-      stepIndex: Number(updated.current_step) || 0,
+      stepIndex: nextIdx,
+      onTriggerFailed: async () => {
+        await executeStudioJobStep({
+          supabaseAdmin,
+          jobId: updated.id,
+          stepIndex: nextIdx,
+          runAICall,
+          baseUrl: resumeBaseUrl,
+          downloadFileBuffer: downloadStorageBufferForUser,
+        });
+      },
     });
 
     return res.json({ success: true, job: rowToStudioJob(updated) });
@@ -4829,7 +4974,7 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
     return res.json({ success: true, kicked });
   });
 
-  app.post('/api/studio/v2/convert', requireAuth, apiRateLimiter, async (req: AuthenticatedRequest, res) => {
+  app.post('/api/studio/v2/convert', requireAuth, requirePaidTier(['plus', 'studio', 'scholar', 'sage']), apiRateLimiter, async (req: AuthenticatedRequest, res) => {
     if (!supabaseAdmin) return res.status(503).json({ success: false, error: 'Database unavailable' });
     if (isStudioKillSwitchEnabled(process.env)) {
       return res.status(503).json({ success: false, error: 'Academic Studio generation is temporarily paused.' });
@@ -5387,17 +5532,20 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
     } catch (error: any) {
       console.error('[Extract Error] Backend exception for', fileName, ':', error?.message || error);
       await markUserFileStatus('failed');
-      res.status(500).json({ success: false, error: error?.message || 'File extraction failed' });
+      res.status(500).json({ success: false, error: 'File extraction failed. Please try again.' });
     }
   });
 
   // SSRF-safe server-side URL content extractor for Study Hub "Upload from a link"
   const isPrivateOrReservedIp = (ip: string): boolean => {
-    const clean = ip.toLowerCase().replace(/^::ffff:/, '');
+    const clean = ip.toLowerCase().trim().replace(/^\[|\]$/g, '').replace(/^::ffff:/, '');
     if (
       clean === 'localhost' ||
+      clean === '::' ||
       clean === '::1' ||
       clean === '0.0.0.0' ||
+      clean.startsWith('::127.') ||
+      clean.startsWith('::0.') ||
       clean.startsWith('127.') ||
       clean.startsWith('10.') ||
       clean.startsWith('192.168.') ||
@@ -5405,8 +5553,14 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
       clean.startsWith('0.') ||
       clean.startsWith('fc') ||
       clean.startsWith('fd') ||
-      clean.startsWith('fe80:')
+      clean.startsWith('ff') ||
+      /^fe[89ab][0-9a-f]:/.test(clean) ||
+      /^7f[0-9a-f]{2}:/.test(clean)
     ) {
+      return true;
+    }
+    const firstOctet = Number(clean.split('.')[0]);
+    if (Number.isInteger(firstOctet) && firstOctet >= 224) {
       return true;
     }
     const m172 = clean.match(/^172\.(\d+)\./);
@@ -5475,9 +5629,10 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
       const MAX_URL_BYTES = 10 * 1024 * 1024; // 10 MB limit
       const MAX_REDIRECTS = 5;
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 8000);
+      const timeoutId = setTimeout(() => controller.abort(), 12_000);
 
       let response!: Response;
+      let buffer: Buffer;
       try {
         for (let hop = 0; hop <= MAX_REDIRECTS; hop++) {
           response = await fetch(currentUrl.toString(), {
@@ -5513,59 +5668,65 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
           }
           break;
         }
-      } finally {
-        clearTimeout(timeoutId);
-      }
 
-      if (!response.ok) {
-        return res.status(200).json({
-          success: false,
-          error: `We couldn't read that link (HTTP ${response.status}). Make sure the page or file is publicly accessible.`
-        });
-      }
-
-      const contentLength = Number(response.headers.get('content-length') || 0);
-      if (contentLength > MAX_URL_BYTES) {
-        return res.status(200).json({
-          success: false,
-          error: 'That file is larger than 10 MB. Download it and upload from your device instead.'
-        });
-      }
-
-      let buffer: Buffer;
-      if (response.body) {
-        const reader = response.body.getReader();
-        const chunks: Uint8Array[] = [];
-        let total = 0;
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          if (value) {
-            total += value.byteLength;
-            if (total > MAX_URL_BYTES) {
-              try { await reader.cancel(); } catch {}
-              return res.status(200).json({
-                success: false,
-                error: 'That file is larger than 10 MB. Download it and upload from your device instead.'
-              });
-            }
-            chunks.push(value);
-          }
+        if (!response.ok) {
+          return res.status(200).json({
+            success: false,
+            error: `We couldn't read that link (HTTP ${response.status}). Make sure the page or file is publicly accessible.`
+          });
         }
-        buffer = Buffer.concat(chunks);
-      } else {
-        const arrayBuf = await response.arrayBuffer();
-        if (arrayBuf.byteLength > MAX_URL_BYTES) {
+
+        const contentLength = Number(response.headers.get('content-length') || 0);
+        if (contentLength > MAX_URL_BYTES) {
           return res.status(200).json({
             success: false,
             error: 'That file is larger than 10 MB. Download it and upload from your device instead.'
           });
         }
-        buffer = Buffer.from(arrayBuf);
+
+        if (response.body) {
+          const reader = response.body.getReader();
+          const chunks: Uint8Array[] = [];
+          let total = 0;
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            if (value) {
+              total += value.byteLength;
+              if (total > MAX_URL_BYTES) {
+                try { await reader.cancel(); } catch {}
+                return res.status(200).json({
+                  success: false,
+                  error: 'That file is larger than 10 MB. Download it and upload from your device instead.'
+                });
+              }
+              chunks.push(value);
+            }
+          }
+          buffer = Buffer.concat(chunks);
+        } else {
+          const arrayBuf = await response.arrayBuffer();
+          if (arrayBuf.byteLength > MAX_URL_BYTES) {
+            return res.status(200).json({
+              success: false,
+              error: 'That file is larger than 10 MB. Download it and upload from your device instead.'
+            });
+          }
+          buffer = Buffer.from(arrayBuf);
+        }
+      } finally {
+        clearTimeout(timeoutId);
       }
+
       const contentType = (response.headers.get('content-type') || '').toLowerCase();
       const pathPart = currentUrl.pathname.split('/').filter(Boolean).pop() || currentUrl.hostname;
-      const derivedName = decodeURIComponent(pathPart).slice(0, 80) || currentUrl.hostname;
+      let safeDecodedName = pathPart;
+      try {
+        safeDecodedName = decodeURIComponent(pathPart);
+      } catch {
+        safeDecodedName = pathPart;
+      }
+      const derivedName = safeDecodedName.slice(0, 80) || currentUrl.hostname;
 
       const isDocBinary =
         contentType.includes('application/pdf') ||
@@ -6678,12 +6839,15 @@ Generate a comprehensive exam simulation with 8 questions from the provided text
 
       if (otpError) {
         console.error('[Admin Auth] Supabase signInWithOtp error:', otpError.message);
-        return res.status(429).json({
-          success: false,
-          error: otpError.message || 'Could not dispatch OTP email right now. Please wait 60 seconds and try again.'
-        });
+        // Return the same generic response to prevent admin email enumeration
+        return res.json(GENERIC_SUCCESS_RESPONSE);
       }
 
+      if (adminOtpCooldowns.size > 1000) {
+        for (const [k, ts] of adminOtpCooldowns.entries()) {
+          if (now - ts >= 5 * 60 * 1000) adminOtpCooldowns.delete(k);
+        }
+      }
       adminOtpCooldowns.set(rawEmail, now);
       await logAdminAction(rawEmail, 'admin_otp_sent', { role: adminRow.role, ip }, ip);
 
@@ -6986,10 +7150,10 @@ Generate a comprehensive exam simulation with 8 questions from the provided text
         .eq('reference', reference)
         .maybeSingle();
 
-      const verifyResponse = await fetch(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
+      const verifyResponse = await fetchWithTimeout(`https://api.paystack.co/transaction/verify/${encodeURIComponent(reference)}`, {
         method: 'GET',
         headers: { Authorization: `Bearer ${secretKey}` }
-      });
+      }, 15_000);
       const verifyData: any = await verifyResponse.json().catch(() => ({}));
 
       if (!verifyResponse.ok || !verifyData.status || !verifyData.data) {
@@ -7240,9 +7404,10 @@ Generate a comprehensive exam simulation with 8 questions from the provided text
       });
 
       if (insertErr) {
+        console.error('[Admin Credits Adjust] Ledger insert error:', insertErr.message);
         return res.status(500).json({
           success: false,
-          error: `Could not insert into ai_credit_ledger (${insertErr.message}). Ensure migration 20261110_ai_credit_ledger_and_rpc.sql is applied.`
+          error: 'Could not adjust AI credits right now. Please check server database logs.'
         });
       }
 
@@ -7915,15 +8080,15 @@ Generate a comprehensive exam simulation with 8 questions from the provided text
     }
   }
 
-  // Ensure default storage buckets exist if service role client is active
+  // Ensure default storage buckets exist if service role client is active (private by default, 25 MB limit)
   if (supabaseAdmin) {
     const bucketsToEnsure = ['user-files', 'group-materials', 'scolaris-library'];
     for (const b of bucketsToEnsure) {
       supabaseAdmin.storage.createBucket(b, {
-        public: true,
-        fileSizeLimit: 52428800 // 50MB
+        public: false,
+        fileSizeLimit: 26214400 // 25MB
       }).then(({ error }) => {
-        if (!error) console.log(`[Storage] Auto-created bucket '${b}' on Supabase.`);
+        if (!error) console.log(`[Storage] Auto-created private bucket '${b}' on Supabase.`);
       }).catch(() => {});
     }
   }

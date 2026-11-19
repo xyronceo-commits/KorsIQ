@@ -4,6 +4,7 @@ import { DBService } from '../services/db';
 import { getCurrentUserId } from '../lib/supabase';
 import { BETA_PLAN_LIMITS } from '../constants';
 import { ResourceSearch } from './ResourceSearch';
+import { toSafeExternalUrl } from '../lib/urlSafety';
 import { 
   Search, 
   Upload, 
@@ -491,10 +492,11 @@ export const ResourcesView: React.FC<ResourcesViewProps> = ({
                         >
                           <BookOpen size={16} />
                         </button>
-                        {file.downloadUrl && (
+                        {toSafeExternalUrl(file.downloadUrl) && (
                           <a
-                            href={file.downloadUrl}
+                            href={toSafeExternalUrl(file.downloadUrl)!}
                             download={file.fileName}
+                            rel="noopener noreferrer"
                             title="Download file"
                             aria-label={`Download ${file.fileName}`}
                             className="p-2 text-[#5B6472] hover:text-[#111827] hover:bg-slate-100 rounded-lg transition-colors min-h-[44px] min-w-[44px] flex items-center justify-center"

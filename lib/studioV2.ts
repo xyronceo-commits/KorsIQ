@@ -17,8 +17,15 @@ export const STUDIO_V2_LIMITS = {
   maxActiveJobsPerUser: 1,
   maxGenerationsPerDay: 5,
   maxTargetWords: 8000,
-  stepLeaseMs: 90_000,
+  stepLeaseMs: 55_000,
   stepTimeoutMs: 40_000,
+  retrieveSourcesTimeoutMs: 22_000,
+  perFileExtractTimeoutMs: 7_000,
+  externalFetchTimeoutMs: 5_000,
+  aiStepTimeoutMs: 38_000,
+  visualStepTimeoutMs: 20_000,
+  assemblyStepTimeoutMs: 15_000,
+  maxExternalFetchRetries: 1,
   maxStepAttempts: 2,
   minSourcesByType: {
     assignment: 5,
@@ -725,5 +732,139 @@ export function applyStepFailure(
     },
     willRetry: false,
     shouldUseFastFallback: false,
+  };
+}
+
+// ==========================================
+// STRICT EDITOR MOUNTING GATE (NO PREMATURE EDITOR)
+// ==========================================
+
+export type StudioWorkspaceRenderMode =
+  | 'none'
+  | 'loading'
+  | 'generating'
+  | 'failed'
+  | 'cancelled'
+  | 'editor';
+
+export interface StudioEditorGateResult {
+  canMountEditor: boolean;
+  mode: StudioWorkspaceRenderMode;
+  relevantJob: StudioJob | null;
+  hasPersistedContent: boolean;
+}
+
+export function hasPersistedDocumentContent(
+  doc: Pick<AcademicDocument, 'sections' | 'contentBlocks'> | null | undefined
+): boolean {
+  if (!doc) return false;
+  const hasSectionText = Array.isArray(doc.sections) && doc.sections.some((s) => (s.content || '').trim().length > 0);
+  const hasBlocks = Array.isArray(doc.contentBlocks) && doc.contentBlocks.length > 0;
+  return hasSectionText || hasBlocks;
+}
+
+/**
+ * Determines whether the editable Academic Studio document editor and export controls
+ * are allowed to mount for a given document and job list.
+ *
+ * Rules:
+ * - Active generation (`queued` / `running`): NEVER mount editor or export controls.
+ * - Failed or cancelled generation: NEVER mount editable editor or export controls.
+ * - Completed (`completed` / `completed_with_issues`): Mount editor ONLY when persisted content is present.
+ * - While job list is hydrating for an unfinished V2 document: show loading state (never flash editor).
+ */
+export function canMountStudioEditor(
+  doc: Pick<AcademicDocument, 'id' | 'status' | 'sections' | 'contentBlocks' | 'brief'> | null | undefined,
+  jobs: StudioJob[],
+  isLoadingJobs: boolean = false
+): StudioEditorGateResult {
+  if (!doc || doc.status === 'planning') {
+    return {
+      canMountEditor: false,
+      mode: 'none',
+      relevantJob: null,
+      hasPersistedContent: false,
+    };
+  }
+
+  const hasContent = hasPersistedDocumentContent(doc);
+  const docJobs = (jobs || [])
+    .filter((j) => j.documentId === doc.id)
+    .sort((a, b) => Date.parse(b.createdAt || '') - Date.parse(a.createdAt || ''));
+
+  const activeJob = docJobs.find((j) => j.status === 'queued' || j.status === 'running') || null;
+  if (activeJob) {
+    return {
+      canMountEditor: false,
+      mode: 'generating',
+      relevantJob: activeJob,
+      hasPersistedContent: hasContent,
+    };
+  }
+
+  const isV2Doc = Boolean(doc.brief && typeof doc.brief.title === 'string' && doc.brief.title.trim().length > 0);
+
+  if (isLoadingJobs && isV2Doc && doc.status !== 'completed') {
+    return {
+      canMountEditor: false,
+      mode: 'loading',
+      relevantJob: null,
+      hasPersistedContent: hasContent,
+    };
+  }
+
+  const latestGenerateJob = docJobs.find((j) => j.jobKind === 'generate') || docJobs[0] || null;
+
+  if (latestGenerateJob) {
+    if (latestGenerateJob.status === 'failed') {
+      return {
+        canMountEditor: false,
+        mode: 'failed',
+        relevantJob: latestGenerateJob,
+        hasPersistedContent: hasContent,
+      };
+    }
+    if (latestGenerateJob.status === 'cancelled') {
+      return {
+        canMountEditor: false,
+        mode: 'cancelled',
+        relevantJob: latestGenerateJob,
+        hasPersistedContent: hasContent,
+      };
+    }
+    if (latestGenerateJob.status === 'completed' || latestGenerateJob.status === 'completed_with_issues') {
+      if (hasContent) {
+        return {
+          canMountEditor: true,
+          mode: 'editor',
+          relevantJob: latestGenerateJob,
+          hasPersistedContent: true,
+        };
+      }
+      return {
+        canMountEditor: false,
+        mode: 'failed',
+        relevantJob: latestGenerateJob,
+        hasPersistedContent: false,
+      };
+    }
+  }
+
+  // Unfinished V2 doc whose job row hasn't arrived yet
+  if (isV2Doc && doc.status === 'drafting' && !hasContent) {
+    return {
+      canMountEditor: false,
+      mode: 'generating',
+      relevantJob: null,
+      hasPersistedContent: false,
+    };
+  }
+
+  // Completed V2 doc or legacy Studio v1 doc (no V2 job)
+  return {
+    canMountEditor: true,
+    mode: 'editor',
+    relevantJob: null,
+    hasPersistedContent: hasContent,
   };
 }

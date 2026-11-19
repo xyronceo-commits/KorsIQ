@@ -258,9 +258,12 @@ export async function scanUploadedBuffer(params: {
   // Optional VirusTotal SHA-256 hash lookup when VIRUSTOTAL_API_KEY is configured
   const vtKey = params.virusTotalApiKey?.trim();
   if (vtKey) {
+    const vtController = new AbortController();
+    const vtTimer = setTimeout(() => vtController.abort(), 5000);
     try {
       const vtRes = await fetch(`https://www.virustotal.com/api/v3/files/${sha256}`, {
         headers: { 'x-apikey': vtKey },
+        signal: vtController.signal,
       });
       if (vtRes.ok) {
         const vtJson: any = await vtRes.json().catch(() => ({}));
@@ -285,7 +288,9 @@ export async function scanUploadedBuffer(params: {
         };
       }
     } catch {
-      // Non-fatal if VT is unreachable; fall through to local signature result
+      // Non-fatal if VT is unreachable or times out; fall through to local signature result
+    } finally {
+      clearTimeout(vtTimer);
     }
   }
 

@@ -168,6 +168,20 @@ async function safeFetchJson(url: string, options: RequestInit, fallbackErrorMes
   throw lastError || new Error(fallbackErrorMessage);
 }
 
+// Track ephemeral podcast blob URL so previous WAV buffers are freed on regeneration
+let lastPodcastBlobUrl: string | null = null;
+
+function createTrackedPodcastBlobUrl(blob: Blob): string {
+  if (lastPodcastBlobUrl) {
+    try {
+      URL.revokeObjectURL(lastPodcastBlobUrl);
+    } catch {}
+  }
+  const nextUrl = URL.createObjectURL(blob);
+  lastPodcastBlobUrl = nextUrl;
+  return nextUrl;
+}
+
 export const GeminiService = {
   async magicImport(text: string) {
     return await safeFetchJson('/api/ai/import', {
@@ -224,10 +238,10 @@ export const GeminiService = {
           audioError = validation.error;
         } else if (bytes[0] === 82 && bytes[1] === 73 && bytes[2] === 70 && bytes[3] === 70) {
           const blob = new Blob([bytes], { type: 'audio/wav' });
-          wavUrl = URL.createObjectURL(blob);
+          wavUrl = createTrackedPodcastBlobUrl(blob);
         } else {
           const wavBlob = pcmToWav(bytes, 16000);
-          wavUrl = URL.createObjectURL(wavBlob);
+          wavUrl = createTrackedPodcastBlobUrl(wavBlob);
         }
       } catch (err: any) {
         console.error('Error validating or decoding audio stream:', err);
@@ -737,6 +751,13 @@ export const GeminiService = {
       method: 'GET',
       headers: await getHeaders(),
     }, 'Failed to load job status.');
+  },
+
+  async tickStudioV2Job(jobId: string): Promise<{ success: boolean; job: any; document?: any; stepResult?: any }> {
+    return await safeFetchJson(`/api/studio/v2/jobs/${encodeURIComponent(jobId)}/tick`, {
+      method: 'POST',
+      headers: await getHeaders(),
+    }, 'Failed to advance generation job.');
   },
 
   async cancelStudioV2Job(jobId: string): Promise<{ success: boolean; job: any }> {
