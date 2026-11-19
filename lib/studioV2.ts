@@ -868,3 +868,85 @@ export function canMountStudioEditor(
     hasPersistedContent: hasContent,
   };
 }
+
+/**
+ * Sorts document sections into canonical academic reading order:
+ * Front matter -> Abstract / Executive Summary -> Body sections (by outline/section order) -> Conclusion -> Appendix -> References.
+ * Prevents Abstract (which is generated last from the finished body) from appearing after Conclusion.
+ */
+export function sortAcademicSections(
+  sections: StudioSection[],
+  outline?: StudioOutlineItem[]
+): StudioSection[] {
+  if (!Array.isArray(sections) || sections.length <= 1) return sections || [];
+  const outlineOrderMap = new Map<string, number>();
+  const outlineKindMap = new Map<string, StudioOutlineSectionKind>();
+  (outline || []).forEach((item, idx) => {
+    outlineOrderMap.set(item.id, typeof item.order === 'number' ? item.order : idx);
+    outlineKindMap.set(item.id, inferSectionKind(item));
+  });
+
+  const bucketOf = (sec: StudioSection): number => {
+    const kind =
+      (sec.outlineItemId && outlineKindMap.get(sec.outlineItemId)) ||
+      inferSectionKind({ title: sec.title });
+    switch (kind) {
+      case 'cover':
+      case 'toc':
+      case 'list_of_tables':
+      case 'list_of_figures':
+      case 'front_matter':
+        return 0;
+      case 'abstract':
+        return 1;
+      case 'body':
+      case 'slide':
+        return 2;
+      case 'conclusion':
+        return 3;
+      case 'appendix':
+        return 4;
+      case 'references':
+        return 5;
+      default:
+        return 2;
+    }
+  };
+
+  return sections
+    .map((sec, originalIdx) => ({ sec, originalIdx }))
+    .sort((a, b) => {
+      const ba = bucketOf(a.sec);
+      const bb = bucketOf(b.sec);
+      if (ba !== bb) return ba - bb;
+      const oa = a.sec.outlineItemId && outlineOrderMap.has(a.sec.outlineItemId)
+        ? outlineOrderMap.get(a.sec.outlineItemId)!
+        : (typeof a.sec.order === 'number' ? a.sec.order : a.originalIdx);
+      const ob = b.sec.outlineItemId && outlineOrderMap.has(b.sec.outlineItemId)
+        ? outlineOrderMap.get(b.sec.outlineItemId)!
+        : (typeof b.sec.order === 'number' ? b.sec.order : b.originalIdx);
+      if (oa !== ob) return oa - ob;
+      return a.originalIdx - b.originalIdx;
+    })
+    .map(({ sec }, idx) => ({ ...sec, order: idx + 1 }));
+}
+
+/**
+ * Computes accurate outline completion metrics based on drafted sections.
+ */
+export function computeOutlineCompletion(sections: StudioSection[]): {
+  completedCount: number;
+  totalCount: number;
+  percent: number;
+} {
+  const list = Array.isArray(sections) ? sections : [];
+  const totalCount = list.length;
+  if (totalCount === 0) return { completedCount: 0, totalCount: 0, percent: 0 };
+  const completedCount = list.filter((s) => Boolean(s.content && s.content.trim().length > 0)).length;
+  return {
+    completedCount,
+    totalCount,
+    percent: Math.round((completedCount / totalCount) * 100),
+  };
+}
+

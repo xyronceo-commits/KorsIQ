@@ -39,7 +39,9 @@ import {
   Bookmark,
   Crown,
   ListOrdered,
-  LayoutTemplate
+  LayoutTemplate,
+  PanelLeft,
+  Presentation
 } from 'lucide-react';
 import {
   AcademicDocument,
@@ -71,7 +73,12 @@ import { downloadPdf } from '../utils/pdfExport';
 import { downloadPptx } from '../utils/pptxExport';
 import { DEFAULT_VISUAL_PREFERENCES, hasAnyVisualElementEnabled } from '../utils/visualRenderer';
 import { BILLING_ENABLED, can, getPlanDisplayName } from '../lib/plans';
-import { canMountStudioEditor, STUDIO_DOWNLOAD_NOTICE } from '../lib/studioV2';
+import {
+  canMountStudioEditor,
+  computeOutlineCompletion,
+  sortAcademicSections,
+  STUDIO_DOWNLOAD_NOTICE,
+} from '../lib/studioV2';
 import {
   documentTemplateToLegacyStyle,
   documentTemplateToVisualPalette,
@@ -88,6 +95,16 @@ import StudioBriefForm from './StudioBriefForm';
 import StudioOutlineReview from './StudioOutlineReview';
 import StudioJobProgress from './StudioJobProgress';
 import { StudioTemplateModal } from './StudioTemplatePicker';
+import {
+  StudioDocumentPreview,
+  StudioSlideDeckPreview,
+  getSectionAnchorId,
+} from './StudioPreviewCanvas';
+import {
+  StudioInspectorDrawer,
+  StudioInspectorTab,
+} from './StudioInspectorDrawer';
+import { StudioWorkspaceView } from './StudioWorkspaceView';
 import { AILiveStatus } from './AILiveStatus';
 
 interface AcademicStudioProps {
@@ -97,6 +114,7 @@ interface AcademicStudioProps {
   addNotification?: (type: any, title: string, message: string, link?: any) => void;
   setProfile?: (p: UserProfile) => void;
   onNavigateTab?: (tab: string) => void;
+  onFocusModeChange?: (focused: boolean) => void;
 }
 
 const DOCUMENT_TYPES: { id: AcademicDocumentType; label: string; desc: string; defaultWords: number }[] = [
@@ -124,7 +142,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   courses = [],
   addNotification,
   setProfile,
-  onNavigateTab
+  onNavigateTab,
+  onFocusModeChange
 }) => {
   // Subscription Entitlement Check
   const isPremium = can('academicStudio', profile?.tier) && (BILLING_ENABLED ? hasStudioPrivileges(profile) : true);
@@ -228,6 +247,65 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   const editorGate = useMemo(
     () => canMountStudioEditor(activeDocument, studioJobs, isLoadingJobs),
     [activeDocument, studioJobs, isLoadingJobs]
+  );
+
+  // Clean Focus Workspace UI State (Default to Preview on completion; Right Inspector Drawer CLOSED by default)
+  const [workspaceMode, setWorkspaceMode] = useState<'preview' | 'edit'>('preview');
+  const [isOutlineOpen, setIsOutlineOpen] = useState<boolean>(() =>
+    typeof window !== 'undefined' ? window.innerWidth >= 1024 : true
+  );
+  const [rightDrawerTab, setRightDrawerTab] = useState<StudioInspectorTab | null>(null);
+  const [showExportMenu, setShowExportMenu] = useState(false);
+
+  const isCompletedWorkspaceActive = Boolean(
+    activeDocument && activeDocument.status !== 'planning' && editorGate.canMountEditor
+  );
+
+  // Auto-collapse main KorsIQ sidebar in App.tsx when viewing a completed document workspace
+  useEffect(() => {
+    onFocusModeChange?.(isCompletedWorkspaceActive);
+    return () => {
+      onFocusModeChange?.(false);
+    };
+  }, [isCompletedWorkspaceActive, onFocusModeChange]);
+
+  // Default to Preview mode and closed inspector drawer when opening a document or when generation finishes
+  useEffect(() => {
+    if (activeDocId && isCompletedWorkspaceActive) {
+      setWorkspaceMode('preview');
+      setRightDrawerTab(null);
+      setShowExportMenu(false);
+    }
+  }, [activeDocId, isCompletedWorkspaceActive]);
+
+  // Resolve active format & canonical ordered sections for the selected variant (Document vs Slides)
+  const activeIsSlides = useMemo(() => {
+    if (!activeDocument) return false;
+    if (activeVariant === 'slides') return true;
+    if (activeVariant === 'document') return false;
+    return isSlideDocument(activeDocument);
+  }, [activeDocument, activeVariant]);
+
+  const activeSections = useMemo(() => {
+    if (!activeDocument) return [];
+    if (activeVariant === 'slides' && activeDocument.convertedVariants?.slides?.sections) {
+      return activeDocument.convertedVariants.slides.sections;
+    }
+    if (activeVariant === 'document' && activeDocument.convertedVariants?.document?.sections) {
+      return sortAcademicSections(
+        activeDocument.convertedVariants.document.sections,
+        activeDocument.outline
+      );
+    }
+    if (isSlideDocument(activeDocument)) {
+      return activeDocument.sections || [];
+    }
+    return sortAcademicSections(activeDocument.sections || [], activeDocument.outline);
+  }, [activeDocument, activeVariant]);
+
+  const outlineCompletion = useMemo(
+    () => computeOutlineCompletion(activeSections),
+    [activeSections]
   );
 
   const applyServerDocPatch = (docRow: any) => {
@@ -577,22 +655,23 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     loadDocs();
   }, [userId]);
 
-  // Sync editor text when switching sections
+  // Sync active section & editor text across activeVariant (Document vs Slides)
   useEffect(() => {
-    if (!activeDocument) return;
-    if (!activeSectionId && activeDocument.sections.length > 0) {
-      setActiveSectionId(activeDocument.sections[0].id);
+    if (!activeDocument || activeSections.length === 0) return;
+    const stillExists = activeSectionId && activeSections.some((s) => s.id === activeSectionId);
+    if (!stillExists) {
+      setActiveSectionId(activeSections[0].id);
     }
-  }, [activeDocument, activeSectionId]);
+  }, [activeDocument, activeSections, activeSectionId]);
 
   useEffect(() => {
     if (!activeDocument || !activeSectionId) {
       setEditorText('');
       return;
     }
-    const sec = activeDocument.sections.find((s) => s.id === activeSectionId);
+    const sec = activeSections.find((s) => s.id === activeSectionId);
     setEditorText(sec ? sec.content : '');
-  }, [activeSectionId, activeDocument]);
+  }, [activeSectionId, activeDocument, activeSections]);
 
   // Load versions when document opens
   useEffect(() => {
@@ -610,13 +689,13 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     await DBService.saveAcademicDocument(updated);
   };
 
-  // Helper: Auto-save current editor text (and optional visuals) to active section
+  // Helper: Auto-save current editor text (and optional visuals) to active variant's section
   const handleEditorChange = (newText: string, nextVisuals?: StudioVisualBlock[]) => {
     setEditorText(newText);
     if (!activeDocument || !activeSectionId) return;
 
     const words = newText.trim().split(/\s+/).filter(Boolean).length;
-    const updatedSections = activeDocument.sections.map((s) =>
+    const mapSection = (s: StudioSection): StudioSection =>
       s.id === activeSectionId
         ? {
             ...s,
@@ -626,9 +705,27 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
             status: (words > 0 ? (s.status === 'empty' ? 'drafted' : s.status) : 'empty') as 'empty' | 'generating' | 'drafted' | 'approved',
             lastEditedAt: new Date().toISOString(),
           }
-        : s
-    );
+        : s;
 
+    if (activeVariant !== 'primary' && activeDocument.convertedVariants?.[activeVariant]) {
+      const targetVariant = activeDocument.convertedVariants[activeVariant]!;
+      const updatedVariantSections = targetVariant.sections.map(mapSection);
+      const updatedDoc: AcademicDocument = {
+        ...activeDocument,
+        convertedVariants: {
+          ...activeDocument.convertedVariants,
+          [activeVariant]: {
+            ...targetVariant,
+            sections: updatedVariantSections,
+            updatedAt: new Date().toISOString(),
+          },
+        },
+      };
+      persistDocument(updatedDoc);
+      return;
+    }
+
+    const updatedSections = activeDocument.sections.map(mapSection);
     const totalWords = updatedSections.reduce((acc, curr) => acc + (curr.wordCount || 0), 0);
     const updatedDoc: AcademicDocument = {
       ...activeDocument,
@@ -638,6 +735,92 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     };
 
     persistDocument(updatedDoc);
+  };
+
+  // Helper: Edit active slide title or speaker notes cleanly in Slide Edit mode
+  const handleSlideMetaChange = (patch: { title?: string; speakerNotes?: string }) => {
+    if (!activeDocument || !activeSectionId) return;
+    const nowIso = new Date().toISOString();
+
+    if (activeVariant === 'slides' && activeDocument.convertedVariants?.slides) {
+      const variant = activeDocument.convertedVariants.slides;
+      const nextSections = patch.title !== undefined
+        ? variant.sections.map((s) => (s.id === activeSectionId ? { ...s, title: patch.title!, lastEditedAt: nowIso } : s))
+        : variant.sections;
+      let nextBlocks = variant.contentBlocks || [];
+      if (patch.speakerNotes !== undefined || patch.title !== undefined) {
+        const hasBlock = nextBlocks.some((b) => b.type === 'slide' && b.sectionId === activeSectionId);
+        if (hasBlock) {
+          nextBlocks = nextBlocks.map((b) =>
+            b.type === 'slide' && b.sectionId === activeSectionId
+              ? {
+                  ...b,
+                  ...(patch.title !== undefined ? { title: patch.title } : {}),
+                  ...(patch.speakerNotes !== undefined ? { speakerNotes: patch.speakerNotes } : {}),
+                }
+              : b
+          );
+        } else {
+          const curSec = nextSections.find((s) => s.id === activeSectionId);
+          nextBlocks = [
+            ...nextBlocks,
+            {
+              id: `blk_slide_${activeSectionId}`,
+              sectionId: activeSectionId,
+              type: 'slide',
+              title: patch.title ?? curSec?.title ?? 'Slide',
+              bullets: [],
+              speakerNotes: patch.speakerNotes || '',
+            },
+          ];
+        }
+      }
+      persistDocument({
+        ...activeDocument,
+        convertedVariants: {
+          ...activeDocument.convertedVariants,
+          slides: { ...variant, sections: nextSections, contentBlocks: nextBlocks, updatedAt: nowIso },
+        },
+      });
+      return;
+    }
+
+    const nextSections = patch.title !== undefined
+      ? activeDocument.sections.map((s) => (s.id === activeSectionId ? { ...s, title: patch.title!, lastEditedAt: nowIso } : s))
+      : activeDocument.sections;
+    let nextBlocks = activeDocument.contentBlocks || [];
+    if (patch.speakerNotes !== undefined || patch.title !== undefined) {
+      const hasBlock = nextBlocks.some((b) => b.type === 'slide' && b.sectionId === activeSectionId);
+      if (hasBlock) {
+        nextBlocks = nextBlocks.map((b) =>
+          b.type === 'slide' && b.sectionId === activeSectionId
+            ? {
+                ...b,
+                ...(patch.title !== undefined ? { title: patch.title } : {}),
+                ...(patch.speakerNotes !== undefined ? { speakerNotes: patch.speakerNotes } : {}),
+              }
+            : b
+        );
+      } else {
+        const curSec = nextSections.find((s) => s.id === activeSectionId);
+        nextBlocks = [
+          ...nextBlocks,
+          {
+            id: `blk_slide_${activeSectionId}`,
+            sectionId: activeSectionId,
+            type: 'slide',
+            title: patch.title ?? curSec?.title ?? 'Slide',
+            bullets: [],
+            speakerNotes: patch.speakerNotes || '',
+          },
+        ];
+      }
+    }
+    persistDocument({
+      ...activeDocument,
+      sections: nextSections,
+      contentBlocks: nextBlocks,
+    });
   };
 
   const handleRemoveSectionVisual = (sectionId: string, visualId: string) => {
@@ -1339,7 +1522,13 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   }, [documents]);
 
   return (
-    <div className="space-y-6 animate-in fade-in duration-500 pb-16 font-sans text-slate-900 dark:text-slate-100">
+    <div
+      className={
+        isCompletedWorkspaceActive
+          ? 'h-full flex flex-col overflow-hidden font-sans text-[#111827] dark:text-slate-100'
+          : 'space-y-6 animate-in fade-in duration-500 pb-16 font-sans text-slate-900 dark:text-slate-100'
+      }
+    >
       {insufficientCreditsNotice && (
         <div
           role="alert"
@@ -1907,787 +2096,71 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
       )}
 
       {/* ========================================================= */}
-      {/* VIEW 3B: 3-COLUMN ACADEMIC WRITING WORKSPACE              */}
+      {/* VIEW 3B: FOCUS ACADEMIC WORKSPACE (PREVIEW / EDIT)        */}
       {/* Mounted ONLY when verified completed with persisted text  */}
       {/* (or legacy v1 document without a V2 generation job)       */}
       {/* ========================================================= */}
       {activeDocument && activeDocument.status !== 'planning' && editorGate.canMountEditor && (
-        <div className="space-y-4" data-studio-view="editor">
-          {/* Top Control Bar per Spec: Title, Saved State, Undo/Redo, Export */}
-          <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg px-4 py-3 flex flex-wrap items-center justify-between gap-3 shadow-xs">
-            <div className="flex items-center gap-3 min-w-0">
-              <button
-                onClick={() => setActiveDocId(null)}
-                className="p-2 text-[#5B6472] hover:text-[#111827] dark:hover:text-white rounded-lg hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer min-h-[44px] min-w-[44px] flex items-center justify-center"
-                title="Back to Documents"
-                aria-label="Back to Documents"
-              >
-                <ArrowLeft size={16} />
-              </button>
-              <div className="min-w-0">
-                <h2 className="font-bold text-sm text-[#111827] dark:text-white truncate max-w-xs sm:max-w-md">
-                  {activeDocument.title}
-                </h2>
-                <div className="flex items-center gap-2 text-[11px] text-[#5B6472]">
-                  <span className="flex items-center gap-1 text-emerald-600 font-medium">
-                    <CheckCircle2 size={12} />
-                    <span>Saved</span>
-                  </span>
-                  <span>•</span>
-                  <span>{activeDocument.currentWordCount.toLocaleString()} words</span>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex flex-wrap items-center gap-2">
-              {/* Undo / Redo */}
-              <div className="flex items-center bg-slate-50 dark:bg-slate-800 rounded-lg border border-[#E5E7EB] dark:border-slate-700 p-0.5">
-                <button
-                  onClick={handleUndo}
-                  disabled={historyIndex <= 0}
-                  className="px-2.5 py-1.5 text-xs text-[#5B6472] hover:text-[#111827] disabled:opacity-40 min-h-[44px] flex items-center gap-1 cursor-pointer"
-                  title="Undo change"
-                  aria-label="Undo"
-                >
-                  <RotateCcw size={13} />
-                  <span>Undo</span>
-                </button>
-                <span className="text-slate-300 dark:text-slate-700 px-1">|</span>
-                <button
-                  onClick={handleRedo}
-                  disabled={historyIndex >= editorHistory.length - 1}
-                  className="px-2.5 py-1.5 text-xs text-[#5B6472] hover:text-[#111827] disabled:opacity-40 min-h-[44px] flex items-center gap-1 cursor-pointer"
-                  title="Redo change"
-                  aria-label="Redo"
-                >
-                  <span>Redo</span>
-                </button>
-              </div>
-
-              {/* Variant Toggle if converted version exists alongside original */}
-              {(activeDocument.convertedVariants?.slides || activeDocument.convertedVariants?.document) && (
-                <div className="flex items-center border border-[#E5E7EB] dark:border-slate-700 rounded-lg overflow-hidden">
-                  <button
-                    type="button"
-                    onClick={() => setActiveVariant('primary')}
-                    className={`px-3 py-2 text-xs font-medium min-h-[44px] cursor-pointer ${
-                      activeVariant === 'primary'
-                        ? 'bg-[#111827] text-white'
-                        : 'bg-white dark:bg-slate-800 text-[#5B6472]'
-                    }`}
-                  >
-                    Original
-                  </button>
-                  {activeDocument.convertedVariants?.slides && (
-                    <button
-                      type="button"
-                      onClick={() => setActiveVariant('slides')}
-                      className={`px-3 py-2 text-xs font-medium min-h-[44px] cursor-pointer ${
-                        activeVariant === 'slides'
-                          ? 'bg-[#111827] text-white'
-                          : 'bg-white dark:bg-slate-800 text-[#5B6472]'
-                      }`}
-                    >
-                      Slides (.pptx)
-                    </button>
-                  )}
-                  {activeDocument.convertedVariants?.document && (
-                    <button
-                      type="button"
-                      onClick={() => setActiveVariant('document')}
-                      className={`px-3 py-2 text-xs font-medium min-h-[44px] cursor-pointer ${
-                        activeVariant === 'document'
-                          ? 'bg-[#111827] text-white'
-                          : 'bg-white dark:bg-slate-800 text-[#5B6472]'
-                      }`}
-                    >
-                      Document
-                    </button>
-                  )}
-                </div>
-              )}
-
-              {/* Switch Format & Template (Free Switch — 0 credits) */}
-              {(() => {
-                const currentFmt =
-                  activeVariant === 'slides'
-                    ? 'pptx'
-                    : activeVariant === 'document'
-                    ? 'docx'
-                    : activeDocument.fileFormat || (activeDocument.metadata?.preferredFormat as StudioFileFormat) || 'docx';
-                const activeIsSlides = currentFmt === 'pptx' || activeDocument.docType === 'presentation';
-                const activeTplName = activeIsSlides
-                  ? getSlideTemplateForDoc(activeDocument).name
-                  : getDocumentTemplateForDoc(activeDocument).name;
-                return (
-                  <div className="flex flex-wrap items-center gap-1.5">
-                    <button
-                      type="button"
-                      data-template-free-switch="true"
-                      onClick={() => setShowTemplateSwitchModal(true)}
-                      title="Switch visual template anytime with 0 credits and re-export immediately."
-                      className="inline-flex items-center gap-1.5 px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-[#111827] dark:text-white rounded-lg text-xs font-medium min-h-[44px] cursor-pointer"
-                    >
-                      <LayoutTemplate size={14} className="text-[#2563EB]" />
-                      <span className="max-w-[160px] truncate">Template: {activeTplName}</span>
-                      <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-[#EFF6FF] dark:bg-blue-950/60 text-[#2563EB] dark:text-blue-300">
-                        Free Switch
-                      </span>
-                    </button>
-                    {currentFmt !== 'pptx' && (
-                      <button
-                        type="button"
-                        onClick={() => handleV2SwitchFormat(currentFmt === 'docx' ? 'pdf' : 'docx')}
-                        className="px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-[#111827] dark:text-white rounded-lg text-xs font-medium min-h-[44px] cursor-pointer"
-                      >
-                        Switch to {currentFmt === 'docx' ? '.pdf' : '.docx'}
-                      </button>
-                    )}
-                    {currentFmt === 'pptx' && (
-                      <button
-                        type="button"
-                        onClick={() => handleV2Download('pdf')}
-                        className="px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-[#111827] dark:text-white rounded-lg text-xs font-medium min-h-[44px] cursor-pointer"
-                      >
-                        Export .pdf
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      onClick={() =>
-                        handleV2SwitchFormat(currentFmt === 'pptx' ? 'convert_to_document' : 'convert_to_slides')
-                      }
-                      title="Runs a short background step and keeps the original."
-                      className="px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-[#111827] dark:text-white rounded-lg text-xs font-medium min-h-[44px] cursor-pointer"
-                    >
-                      {currentFmt === 'pptx' ? 'Convert to document' : 'Convert to slides'}
-                    </button>
-                  </div>
-                );
-              })()}
-
-              {/* Primary Download Button */}
-              <button
-                type="button"
-                onClick={() => handleV2Download()}
-                className="px-4 py-2 bg-[#2563EB] hover:bg-[#1746A2] text-white rounded-lg text-xs font-semibold inline-flex items-center gap-1.5 cursor-pointer min-h-[44px]"
-              >
-                <Download size={14} />
-                <span>
-                  Download .{activeVariant === 'slides' ? 'pptx' : activeVariant === 'document' ? 'docx' : (activeDocument.fileFormat || 'docx')}
-                </span>
-              </button>
-            </div>
-          </div>
-
-          {/* Post-generation Template Switch Modal (0 credits — mounted strictly inside View 3B) */}
-          {(() => {
-            const activeIsSlides =
-              activeVariant === 'slides' ||
-              (activeVariant === 'primary' && isSlideDocument(activeDocument));
-            const currentTplId = activeIsSlides
-              ? getSlideTemplateForDoc(activeDocument).id
-              : getDocumentTemplateForDoc(activeDocument).id;
-            return (
-              <StudioTemplateModal
-                isOpen={showTemplateSwitchModal}
-                mode={activeIsSlides ? 'slide' : 'document'}
-                initialTemplateId={currentTplId}
-                onClose={() => setShowTemplateSwitchModal(false)}
-                onConfirm={handleSwitchTemplateFree}
-                sample={{
-                  title: activeDocument.title,
-                  courseCode: activeDocument.metadata?.courseCode || activeDocument.brief?.courseCode,
-                  courseTitle: activeDocument.metadata?.courseTitle || activeDocument.brief?.courseTitle,
-                  studentName: activeDocument.metadata?.studentName || activeDocument.brief?.studentName,
-                  institution: activeDocument.metadata?.institution || activeDocument.brief?.institution,
-                  date: activeDocument.metadata?.submissionDate || activeDocument.brief?.date,
-                }}
-                titleLabel={
-                  activeIsSlides
-                    ? 'Switch Slide Template (Free — 0 Credits)'
-                    : 'Switch Document Template (Free — 0 Credits)'
-                }
-              />
-            );
-          })()}
-
-          {/* Plain source count & integrity notice */}
-          <div className="flex flex-wrap items-center justify-between gap-2 px-1 text-xs text-[#5B6472] dark:text-slate-400">
-            <span>
-              {typeof activeDocument.sourceCount === 'number'
-                ? `Found ${activeDocument.sourceCount} verifiable ${activeDocument.sourceCount === 1 ? 'source' : 'sources'}.`
-                : `${activeDocument.references.length} verifiable ${activeDocument.references.length === 1 ? 'source' : 'sources'}.`}
-            </span>
-            <span>{STUDIO_DOWNLOAD_NOTICE}</span>
-          </div>
-
-          {/* Batch Progress Bar */}
-          {batchProgress && (
-            <div className="p-3 bg-blue-50 dark:bg-blue-950/60 border border-blue-200 dark:border-blue-900 rounded-lg flex items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-4 h-4 border-2 border-blue-600 border-t-transparent rounded-full animate-spin shrink-0" />
-                <div className="text-xs">
-                  <p className="font-semibold text-blue-900 dark:text-blue-200">
-                    Drafting Section {batchProgress.current} of {batchProgress.total}
-                  </p>
-                  <p className="text-blue-700 dark:text-blue-400 truncate max-w-sm">
-                    {batchProgress.title}
-                  </p>
-                </div>
-              </div>
-              <div className="text-xs font-semibold text-blue-600">
-                {Math.round((batchProgress.current / batchProgress.total) * 100)}%
-              </div>
-            </div>
-          )}
-
-          {/* 3-COLUMN WORKSPACE GRID */}
-          <div className="grid grid-cols-1 lg:grid-cols-12 gap-4 min-h-[640px]">
-            {/* COLUMN 1: LEFT SIDEBAR - OUTLINE & NAVIGATION (3 Cols on Desktop) */}
-            <div className="hidden lg:block lg:col-span-3 space-y-3">
-              <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg p-3.5 space-y-3 h-full flex flex-col justify-between shadow-xs">
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between px-1">
-                    <span className="text-[10px] font-bold text-[#5B6472] uppercase tracking-wider">
-                      Outline ({activeDocument.sections.length})
-                    </span>
-                    <span className="text-[10px] font-semibold text-[#2563EB] bg-[#EFF6FF] dark:bg-blue-950/60 px-2 py-0.5 rounded">
-                      {Math.min(100, Math.round((activeDocument.currentWordCount / activeDocument.targetWordCount) * 100))}%
-                    </span>
-                  </div>
-
-                  {/* Section List */}
-                  <div className="space-y-1 max-h-[500px] overflow-y-auto pr-1">
-                    {activeDocument.sections.map((sec, idx) => {
-                      const isActive = sec.id === activeSectionId;
-                      const hasContent = sec.content && sec.content.trim().length > 0;
-
-                      return (
-                        <button
-                          key={sec.id}
-                          type="button"
-                          onClick={() => setActiveSectionId(sec.id)}
-                          className={`w-full text-left p-2.5 rounded-lg transition-colors cursor-pointer flex items-start gap-2.5 ${
-                            isActive
-                              ? 'bg-[#EFF6FF] dark:bg-blue-950/60 text-[#2563EB] font-semibold border-l-2 border-[#2563EB]'
-                              : 'hover:bg-slate-50 dark:hover:bg-slate-800 text-[#111827] dark:text-slate-300'
-                          }`}
-                        >
-                          <span
-                            className={`w-5 h-5 rounded text-[10px] font-semibold flex items-center justify-center shrink-0 mt-0.5 ${
-                              isActive
-                                ? 'bg-[#2563EB] text-white'
-                                : hasContent
-                                ? 'bg-emerald-100 text-emerald-800'
-                                : 'bg-slate-100 text-[#5B6472]'
-                            }`}
-                          >
-                            {hasContent ? '✓' : idx + 1}
-                          </span>
-                          <div className="flex-1 min-w-0">
-                            <p className="text-xs truncate leading-tight">
-                              {sec.title}
-                            </p>
-                            <p className="text-[10px] text-[#5B6472] mt-0.5">
-                              {sec.wordCount || 0} words
-                            </p>
-                          </div>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-lg text-xs text-[#5B6472] space-y-1 border border-[#E5E7EB] dark:border-slate-800">
-                  <div className="flex justify-between">
-                    <span>Goal:</span>
-                    <span>{activeDocument.targetWordCount.toLocaleString()} words</span>
-                  </div>
-                  <div className="flex justify-between font-semibold">
-                    <span>Written:</span>
-                    <span className="text-[#2563EB] dark:text-blue-400">
-                      {activeDocument.currentWordCount.toLocaleString()} words
-                    </span>
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            {/* COLUMN 2: CENTER - NOTION / WORD PAPER CANVAS (6 Cols on Desktop, Full on Mobile) */}
-            <div className="col-span-1 lg:col-span-6 space-y-3">
-              <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg p-5 sm:p-6 space-y-4 shadow-xs flex flex-col h-full">
-                {/* Active Section Header */}
-                {(() => {
-                  const currentSec = activeDocument.sections.find((s) => s.id === activeSectionId);
-                  const currentOutline = activeDocument.outline.find((o) => o.id === currentSec?.outlineItemId);
-
-                  return (
-                    <div className="space-y-1 pb-3 border-b border-[#E5E7EB] dark:border-slate-800">
-                      <div className="flex items-center justify-between gap-2">
-                        <span className="text-[10px] font-bold uppercase tracking-wider text-[#2563EB] bg-[#EFF6FF] dark:bg-blue-950/60 px-2 py-0.5 rounded">
-                          Section {currentSec?.order || 1} of {activeDocument.sections.length}
-                        </span>
-                        <span className="text-xs text-[#5B6472] font-medium">
-                          Goal: ~{currentOutline?.targetWords || 400} words
-                        </span>
-                      </div>
-                      <h3 className="font-bold text-base text-[#111827] dark:text-white">
-                        {currentSec?.title || 'Section Editor'}
-                      </h3>
-                      <p className="text-xs text-[#5B6472]">
-                        Draft the next paragraph yourself, or ask for a suggested draft of this section.
-                      </p>
-                    </div>
-                  );
-                })()}
-
-                {/* Editor Textarea (Live Template Styled Canvas) */}
-                {(() => {
-                  const activeIsSlides =
-                    activeVariant === 'slides' ||
-                    (activeVariant === 'primary' && isSlideDocument(activeDocument));
-                  const docTpl = !activeIsSlides ? getDocumentTemplateForDoc(activeDocument) : null;
-                  const slideTpl = activeIsSlides ? getSlideTemplateForDoc(activeDocument) : null;
-                  const canvasStyle: React.CSSProperties = activeIsSlides
-                    ? {
-                        backgroundColor: slideTpl!.colors.bg,
-                        color: slideTpl!.colors.body,
-                        borderColor: slideTpl!.colors.border,
-                        fontFamily: slideTpl!.fonts.bodyCss,
-                      }
-                    : {
-                        backgroundColor: docTpl!.colors.pageBg,
-                        color: docTpl!.colors.text,
-                        borderColor: docTpl!.colors.border === '#000000' ? '#D1D5DB' : docTpl!.colors.border,
-                        fontFamily: docTpl!.fonts.bodyCss,
-                        lineHeight: docTpl!.lineSpacing,
-                      };
-                  return (
-                <div className="flex-1 flex flex-col relative">
-                  <textarea
-                    value={editorText}
-                    onChange={(e) => handleEditorChangeWithHistory(e.target.value)}
-                    onSelect={(e) => {
-                      const target = e.target as HTMLTextAreaElement;
-                      const sel = target.value.substring(target.selectionStart, target.selectionEnd);
-                      if (sel && sel.trim().length > 3) {
-                        setSelectedTextSnippet(sel);
-                        setEditorSelectionRange({ start: target.selectionStart, end: target.selectionEnd });
-                      }
-                    }}
-                    placeholder="Start writing, or ask for a suggested draft."
-                    data-active-template-id={activeIsSlides ? slideTpl!.id : docTpl!.id}
-                    style={canvasStyle}
-                    className="w-full flex-1 min-h-[380px] p-4 border rounded-lg text-sm outline-none focus:border-[#2563EB] focus:ring-1 focus:ring-[#2563EB] transition-colors resize-none"
-                  />
-
-                  {/* Selected Text Floating Helper */}
-                  {selectedTextSnippet && (
-                    <div className="absolute bottom-4 left-4 right-4 bg-[#111827] text-white p-3 rounded-lg shadow-xl flex items-center justify-between gap-3 text-xs border border-slate-800">
-                      <div className="truncate flex-1">
-                        <span className="text-blue-400 font-semibold">Selected: </span>
-                        <span className="italic truncate">"{selectedTextSnippet}"</span>
-                      </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          onClick={() => handleContextualAssist('Elevate academic tone and vocabulary')}
-                          className="px-2.5 py-1 bg-[#2563EB] hover:bg-blue-500 rounded text-xs font-semibold cursor-pointer"
-                        >
-                          {BILLING_ENABLED ? 'Rewrite — 1 credit' : 'Rewrite'}
-                        </button>
-                        <button
-                          onClick={() => setSelectedTextSnippet('')}
-                          className="p-1 text-slate-400 hover:text-white cursor-pointer"
-                        >
-                          <X size={12} />
-                        </button>
-                      </div>
-                    </div>
-                  )}
-                </div>
-                  );
-                })()}
-
-                {/* Editor Footer Status */}
-                <div className="flex items-center justify-between text-xs text-[#5B6472] pt-2 border-t border-[#E5E7EB] dark:border-slate-800">
-                  <span>
-                    Words in section: <strong className="text-[#111827] dark:text-slate-300 font-semibold">{editorText.trim().split(/\s+/).filter(Boolean).length}</strong>
-                  </span>
-                  <span>Autosaved</span>
-                </div>
-
-                {/* Section Visual Elements (only rendered when generated/enabled) */}
-                {(() => {
-                  const curSec = activeDocument.sections.find((s) => s.id === activeSectionId);
-                  if (!curSec?.visuals || curSec.visuals.length === 0) return null;
-                  const activeIsSlides =
-                    activeVariant === 'slides' ||
-                    (activeVariant === 'primary' && isSlideDocument(activeDocument));
-                  const visualPalette = activeIsSlides
-                    ? slideTemplateToVisualPalette(getSlideTemplateForDoc(activeDocument))
-                    : documentTemplateToVisualPalette(getDocumentTemplateForDoc(activeDocument));
-                  return (
-                    <div className="pt-3 border-t border-[#E5E7EB] dark:border-slate-800 space-y-2">
-                      <p className="text-[11px] font-semibold text-slate-600 dark:text-slate-300 uppercase tracking-wider">
-                        Optional Visual Elements ({curSec.visuals.length})
-                      </p>
-                      {curSec.visuals.map((vis) => (
-                        <StudioVisualCard
-                          key={vis.id}
-                          block={vis}
-                          designStyle={activeDocument.metadata?.visualPreferences?.designStyle}
-                          palette={visualPalette}
-                          onRemove={() => handleRemoveSectionVisual(curSec.id, vis.id)}
-                        />
-                      ))}
-                    </div>
-                  );
-                })()}
-              </div>
-            </div>
-
-            {/* COLUMN 3: RIGHT SIDEBAR - BRIEF, SOURCES & ACTIONS (3 Cols on Desktop) */}
-            <div className="hidden lg:block lg:col-span-3 space-y-3">
-              <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg p-3.5 space-y-3.5 h-full flex flex-col shadow-xs">
-                {/* Brief Card */}
-                <div className="p-3 bg-slate-50 dark:bg-slate-800/60 border border-[#E5E7EB] dark:border-slate-800 rounded-lg space-y-1">
-                  <p className="text-[10px] font-bold text-[#5B6472] uppercase tracking-wider">Brief</p>
-                  <p className="text-xs font-semibold text-[#111827] dark:text-white capitalize">
-                    {activeDocument.docType.replace('_', ' ')} · {activeDocument.targetWordCount.toLocaleString()} words · {profile?.level || 'undergraduate'} · {activeDocument.citationStyle}
-                    {activeDocument.metadata?.preferredFormat
-                      ? ` · ${activeDocument.metadata.preferredFormat === 'other' ? (activeDocument.metadata.otherFormatLabel || 'Other') : activeDocument.metadata.preferredFormat.toUpperCase()}`
-                      : ''}
-                  </p>
-                </div>
-
-                {/* Action Buttons: Write Section (3), Full Document (10), Rewrite (1), Review (1) */}
-                <div className="space-y-2">
-                  <button
-                    type="button"
-                    onClick={() => handleGenerateActiveSection('generate')}
-                    disabled={isSectionGenerating || !!batchProgress}
-                    className="w-full py-2.5 px-3 bg-[#2563EB] hover:bg-[#1D4ED8] text-white rounded-lg text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer shadow-sm disabled:opacity-50 min-h-[44px]"
-                  >
-                    <Wand2 size={14} />
-                    <span>{isSectionGenerating ? 'Drafting...' : (BILLING_ENABLED ? 'Write Section — 3 credits' : 'Write Section')}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleBatchGenerateAll}
-                    disabled={isSectionGenerating || !!batchProgress}
-                    className="w-full py-2 px-3 bg-white dark:bg-slate-800 border border-[#2563EB]/40 hover:bg-blue-50/50 dark:hover:bg-slate-700 text-[#2563EB] dark:text-blue-400 rounded-lg text-xs font-semibold flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 min-h-[44px]"
-                  >
-                    <Layers size={14} />
-                    <span>{batchProgress ? 'Drafting Full Document...' : (BILLING_ENABLED ? 'Generate Full Document — 10 credits' : 'Generate Full Document')}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={() => {
-                      if (selectedTextSnippet) {
-                        handleContextualAssist('Elevate academic tone and vocabulary');
-                      } else {
-                        handleContextualAssist('Improve academic clarity, structure, and scholarly tone');
-                      }
-                    }}
-                    disabled={isSectionGenerating || isAssistLoading || !editorText}
-                    className="w-full py-2 px-3 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-[#111827] dark:text-white rounded-lg text-xs font-medium flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 min-h-[44px]"
-                  >
-                    <span>{isAssistLoading ? 'Rewriting...' : (BILLING_ENABLED ? 'Rewrite — 1 credit' : 'Rewrite')}</span>
-                  </button>
-
-                  <button
-                    type="button"
-                    onClick={handleRunDocumentReview}
-                    disabled={isReviewLoading}
-                    className="w-full py-2 px-3 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-700 text-[#111827] dark:text-white rounded-lg text-xs font-medium flex items-center justify-center gap-2 cursor-pointer disabled:opacity-40 min-h-[44px]"
-                  >
-                    <span>{isReviewLoading ? 'Checking...' : (BILLING_ENABLED ? 'Check citations — 1 credit' : 'Check citations')}</span>
-                  </button>
-                </div>
-
-                {/* Sources List & Citation Chips */}
-                <div className="flex-1 flex flex-col justify-between space-y-2 pt-2 border-t border-[#E5E7EB] dark:border-slate-800">
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <span className="text-[10px] font-bold text-[#5B6472] uppercase tracking-wider">
-                        Sources ({activeDocument.references.length})
-                      </span>
-                      <button
-                        type="button"
-                        onClick={() => setShowAddRefModal(true)}
-                        className="text-xs font-semibold text-[#2563EB] hover:underline cursor-pointer"
-                      >
-                        + Add Source
-                      </button>
-                    </div>
-
-                    {activeDocument.references.length === 0 ? (
-                      <div className="p-4 bg-slate-50 dark:bg-slate-800/60 rounded-lg text-center text-xs text-[#5B6472] space-y-2">
-                        <p>No attached sources yet.</p>
-                        <button
-                          type="button"
-                          onClick={() => setShowAddRefModal(true)}
-                          className="px-3 py-1.5 bg-[#2563EB] text-white rounded text-xs font-semibold cursor-pointer"
-                        >
-                          Attach Source
-                        </button>
-                      </div>
-                    ) : (
-                      <div className="space-y-2 max-h-[260px] overflow-y-auto pr-1">
-                        {activeDocument.references.map((ref) => {
-                          const leadAuthor = ref.authors.split(',')[0].split(' ')[0];
-                          const chipLabel = `(${leadAuthor}, ${ref.year || 'n.d.'})`;
-                          return (
-                            <div
-                              key={ref.id}
-                              className="p-2.5 bg-slate-50 dark:bg-slate-800/60 border border-[#E5E7EB] dark:border-slate-800 rounded-lg space-y-1.5 text-xs"
-                            >
-                              <div className="flex items-start justify-between gap-1.5">
-                                <p className="font-semibold text-[#111827] dark:text-white line-clamp-2 text-xs">
-                                  {ref.title}
-                                </p>
-                                <button
-                                  type="button"
-                                  onClick={() => handleInsertCitation(ref)}
-                                  className="px-2 py-1 bg-[#EFF6FF] text-[#2563EB] hover:bg-[#2563EB] hover:text-white rounded text-[11px] font-bold cursor-pointer shrink-0 transition-colors"
-                                  title={`Insert citation chip ${chipLabel} at cursor`}
-                                >
-                                  {chipLabel}
-                                </button>
-                              </div>
-                              <p className="text-[11px] text-[#5B6472]">
-                                {ref.authors} ({ref.year || 'n.d.'})
-                              </p>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Versions access */}
-                  <div className="pt-2 border-t border-[#E5E7EB] dark:border-slate-800 flex items-center justify-between text-xs">
-                    <button
-                      type="button"
-                      onClick={() => {
-                        if (!isVersionsAllowed) {
-                          setShowQuietUpgrade({
-                            feature: 'Version History',
-                            description: 'Document versioning and revision history are available in the Academic Studio plan.'
-                          });
-                        } else {
-                          setActiveRightTab('versions');
-                        }
-                      }}
-                      className="text-xs text-[#5B6472] hover:text-[#2563EB] flex items-center gap-1 font-medium cursor-pointer"
-                    >
-                      <History size={13} />
-                      <span>Versions</span>
-                    </button>
-                    <span className="text-[10px] text-[#5B6472]">KorsIQ Studio</span>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* MOBILE FOCUSED MODE BOTTOM BAR (Visible on < lg) */}
-          <div className="lg:hidden fixed bottom-14 left-0 right-0 z-30 bg-white dark:bg-slate-900 border-t border-[#E5E7EB] dark:border-slate-800 px-3 py-1.5 flex items-center justify-around shadow-md">
-            <button
-              type="button"
-              onClick={() => setMobileSheet('outline')}
-              className="flex flex-col items-center justify-center min-h-[44px] min-w-[44px] text-[11px] font-semibold text-[#5B6472] hover:text-[#2563EB]"
-            >
-              <ListOrdered size={16} />
-              <span>Outline</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setMobileSheet('sources')}
-              className="flex flex-col items-center justify-center min-h-[44px] min-w-[44px] text-[11px] font-semibold text-[#5B6472] hover:text-[#2563EB]"
-            >
-              <BookOpen size={16} />
-              <span>Sources</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => setMobileSheet('cite')}
-              className="flex flex-col items-center justify-center min-h-[44px] min-w-[44px] text-[11px] font-semibold text-[#5B6472] hover:text-[#2563EB]"
-            >
-              <Quote size={16} />
-              <span>Cite</span>
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                if (!isVersionsAllowed) {
-                  setShowQuietUpgrade({
-                    feature: 'Version History',
-                    description: 'Document versioning and revision history are available in the Academic Studio plan.'
-                  });
-                } else {
-                  setMobileSheet('versions');
-                }
-              }}
-              className="flex flex-col items-center justify-center min-h-[44px] min-w-[44px] text-[11px] font-semibold text-[#5B6472] hover:text-[#2563EB]"
-            >
-              <History size={16} />
-              <span>Versions</span>
-            </button>
-          </div>
-
-          {/* MOBILE BOTTOM SHEETS */}
-          {mobileSheet && (
-            <div className="fixed inset-0 z-50 bg-[#111827]/40 flex flex-col justify-end">
-              <div className="bg-white dark:bg-slate-900 border-t border-[#E5E7EB] dark:border-slate-800 rounded-t-xl max-h-[75vh] flex flex-col p-4 shadow-xl space-y-3">
-                <div className="flex items-center justify-between pb-2 border-b border-[#E5E7EB]">
-                  <h3 className="font-bold text-sm text-[#111827] dark:text-white capitalize">
-                    {mobileSheet === 'outline' ? 'Document Outline' : mobileSheet === 'sources' ? 'Attached Sources' : mobileSheet === 'cite' ? 'Insert Citation' : 'Version History'}
-                  </h3>
-                  <button
-                    type="button"
-                    onClick={() => setMobileSheet(null)}
-                    className="p-2 text-[#5B6472] hover:text-[#111827] min-h-[44px] min-w-[44px] flex items-center justify-center cursor-pointer"
-                    aria-label="Close sheet"
-                  >
-                    <X size={18} />
-                  </button>
-                </div>
-
-                <div className="flex-1 overflow-y-auto space-y-2 py-1">
-                  {mobileSheet === 'outline' && (
-                    <div className="space-y-1.5">
-                      {activeDocument.sections.map((sec, idx) => (
-                        <button
-                          key={sec.id}
-                          type="button"
-                          onClick={() => {
-                            setActiveSectionId(sec.id);
-                            setMobileSheet(null);
-                          }}
-                          className={`w-full text-left p-3 rounded-lg border min-h-[44px] flex items-center justify-between cursor-pointer ${
-                            sec.id === activeSectionId
-                              ? 'bg-[#EFF6FF] border-[#2563EB] text-[#2563EB] font-bold'
-                              : 'border-[#E5E7EB] hover:bg-slate-50 text-[#111827]'
-                          }`}
-                        >
-                          <span className="text-xs truncate">{idx + 1}. {sec.title}</span>
-                          <span className="text-[11px] text-[#5B6472]">{sec.wordCount || 0} w</span>
-                        </button>
-                      ))}
-                    </div>
-                  )}
-
-                  {mobileSheet === 'sources' && (
-                    <div className="space-y-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMobileSheet(null);
-                          setShowAddRefModal(true);
-                        }}
-                        className="w-full py-2 bg-[#2563EB] text-white rounded-lg text-xs font-semibold min-h-[44px] cursor-pointer"
-                      >
-                        + Add Source
-                      </button>
-                      {activeDocument.references.length === 0 ? (
-                        <p className="text-xs text-[#5B6472] text-center py-4">No sources attached yet.</p>
-                      ) : (
-                        activeDocument.references.map((ref) => (
-                          <div key={ref.id} className="p-2.5 bg-slate-50 rounded-lg border border-[#E5E7EB] text-xs">
-                            <p className="font-semibold text-[#111827]">{ref.title}</p>
-                            <p className="text-[11px] text-[#5B6472]">{ref.authors} ({ref.year || 'n.d.'})</p>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  )}
-
-                  {mobileSheet === 'cite' && (
-                    <div className="space-y-2">
-                      <p className="text-xs text-[#5B6472]">Tap a citation chip to insert into the active section:</p>
-                      {activeDocument.references.length === 0 ? (
-                        <div className="text-center py-4 text-xs text-[#5B6472]">
-                          <p>No attached sources to cite.</p>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setMobileSheet(null);
-                              setShowAddRefModal(true);
-                            }}
-                            className="mt-2 px-3 py-1.5 bg-[#2563EB] text-white rounded-lg text-xs font-semibold min-h-[44px] cursor-pointer"
-                          >
-                            Add Source
-                          </button>
-                        </div>
-                      ) : (
-                        <div className="flex flex-wrap gap-2 pt-1">
-                          {activeDocument.references.map((ref) => {
-                            const leadAuthor = ref.authors.split(',')[0].split(' ')[0];
-                            const chipLabel = `(${leadAuthor}, ${ref.year || 'n.d.'})`;
-                            return (
-                              <button
-                                key={ref.id}
-                                type="button"
-                                onClick={() => {
-                                  handleInsertCitation(ref);
-                                  setMobileSheet(null);
-                                  showToast(`Inserted citation: ${chipLabel}`);
-                                }}
-                                className="px-3 py-2 bg-[#EFF6FF] border border-[#2563EB]/40 text-[#2563EB] hover:bg-[#2563EB] hover:text-white rounded-lg text-xs font-semibold cursor-pointer min-h-[44px] flex items-center gap-1.5"
-                              >
-                                <Quote size={12} />
-                                <span>{chipLabel}</span>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      )}
-                    </div>
-                  )}
-
-                  {mobileSheet === 'versions' && (
-                    <div className="space-y-2">
-                      <button
-                        type="button"
-                        onClick={handleSaveVersionSnapshot}
-                        disabled={isVersionSaving}
-                        className="w-full py-2 bg-[#2563EB] text-white rounded-lg text-xs font-semibold min-h-[44px] cursor-pointer"
-                      >
-                        {isVersionSaving ? 'Saving...' : 'Save Current Snapshot'}
-                      </button>
-                      {versions.length === 0 ? (
-                        <p className="text-xs text-[#5B6472] text-center py-4">No snapshots saved yet.</p>
-                      ) : (
-                        versions.map((ver) => (
-                          <div key={ver.id} className="p-2.5 bg-slate-50 rounded-lg border border-[#E5E7EB] text-xs flex items-center justify-between">
-                            <div>
-                              <p className="font-semibold">{ver.wordCount.toLocaleString()} words</p>
-                              <p className="text-[10px] text-[#5B6472]">{new Date(ver.createdAt).toLocaleString()}</p>
-                            </div>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                handleRestoreVersion(ver);
-                                setMobileSheet(null);
-                              }}
-                              className="text-xs font-semibold text-[#2563EB] p-2 min-h-[44px] cursor-pointer"
-                            >
-                              Restore
-                            </button>
-                          </div>
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
+        <StudioWorkspaceView
+          doc={activeDocument}
+          profile={profile}
+          activeVariant={activeVariant}
+          onChangeVariant={setActiveVariant}
+          activeIsSlides={activeIsSlides}
+          activeSections={activeSections}
+          outlineCompletion={outlineCompletion}
+          activeSectionId={activeSectionId}
+          onSelectSectionId={setActiveSectionId}
+          workspaceMode={workspaceMode}
+          onChangeWorkspaceMode={setWorkspaceMode}
+          isOutlineOpen={isOutlineOpen}
+          onToggleOutline={() => setIsOutlineOpen((prev) => !prev)}
+          rightDrawerTab={rightDrawerTab}
+          onChangeRightDrawerTab={setRightDrawerTab}
+          showExportMenu={showExportMenu}
+          onToggleExportMenu={setShowExportMenu}
+          showTemplateSwitchModal={showTemplateSwitchModal}
+          onToggleTemplateSwitchModal={setShowTemplateSwitchModal}
+          editorText={editorText}
+          onEditorChangeWithHistory={handleEditorChangeWithHistory}
+          onSlideMetaChange={handleSlideMetaChange}
+          selectedTextSnippet={selectedTextSnippet}
+          onSelectTextSnippet={(snippet, range) => {
+            setSelectedTextSnippet(snippet);
+            setEditorSelectionRange(range);
+          }}
+          historyIndex={historyIndex}
+          historyLength={editorHistory.length}
+          onUndo={handleUndo}
+          onRedo={handleRedo}
+          isSectionGenerating={isSectionGenerating}
+          batchProgress={batchProgress}
+          isAssistLoading={isAssistLoading}
+          isReviewLoading={isReviewLoading}
+          reviewResult={reviewResult}
+          versions={versions}
+          isVersionSaving={isVersionSaving}
+          isVersionsAllowed={isVersionsAllowed}
+          onBackToDocuments={() => setActiveDocId(null)}
+          onGenerateActiveSection={() => handleGenerateActiveSection('generate')}
+          onBatchGenerateAll={handleBatchGenerateAll}
+          onContextualAssist={handleContextualAssist}
+          onRunDocumentReview={handleRunDocumentReview}
+          onOpenAddRefModal={() => setShowAddRefModal(true)}
+          onInsertCitation={handleInsertCitation}
+          onRemoveSectionVisual={handleRemoveSectionVisual}
+          onSaveVersionSnapshot={handleSaveVersionSnapshot}
+          onRestoreVersion={handleRestoreVersion}
+          onRequireVersionsUpgrade={() =>
+            setShowQuietUpgrade({
+              feature: 'Version History',
+              description: 'Document versioning and revision history are available in the Academic Studio plan.',
+            })
+          }
+          onSwitchTemplateFree={handleSwitchTemplateFree}
+          onDownloadFormat={(fmt) => handleV2Download(fmt)}
+          onConvertFormat={(target) => handleV2SwitchFormat(target)}
+        />
       )}
 
       {/* ========================================================= */}
