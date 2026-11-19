@@ -61,6 +61,7 @@ import {
   StudioVersion,
   StudioVisualBlock,
   StudioVisualPreferences,
+  StudioWeeklyQuota,
   UserFile,
   UserProfile,
   hasStudioPrivileges,
@@ -75,7 +76,10 @@ import { DEFAULT_VISUAL_PREFERENCES, hasAnyVisualElementEnabled } from '../utils
 import { BILLING_ENABLED, can, getPlanDisplayName } from '../lib/plans';
 import {
   canMountStudioEditor,
+  computeDocumentCardProgress,
   computeOutlineCompletion,
+  formatQuotaResetLabel,
+  selectStudioHomeStatusBar,
   sortAcademicSections,
   STUDIO_DOWNLOAD_NOTICE,
 } from '../lib/studioV2';
@@ -233,11 +237,15 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   const [isStartingV2Job, setIsStartingV2Job] = useState(false);
   const [v2JobStartError, setV2JobStartError] = useState<string | null>(null);
   const [studioJobs, setStudioJobs] = useState<StudioJob[]>([]);
+  const [weeklyQuota, setWeeklyQuota] = useState<StudioWeeklyQuota | null>(null);
+  const [sessionCompletedJobIds, setSessionCompletedJobIds] = useState<string[]>([]);
+  const [dismissedHomeJobIds, setDismissedHomeJobIds] = useState<string[]>([]);
   const [isLoadingJobs, setIsLoadingJobs] = useState(true);
   const [userFiles, setUserFiles] = useState<UserFile[]>([]);
   const [activeVariant, setActiveVariant] = useState<'primary' | 'document' | 'slides'>('primary');
   const previousJobStatusRef = useRef<Record<string, string>>({});
   const tickInFlightRef = useRef(false);
+  const draftOutlineInFlightRef = useRef(false);
 
   const hasActiveStudioJob = useMemo(
     () => studioJobs.some((j) => j.status === 'queued' || j.status === 'running'),
@@ -335,6 +343,9 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
       const res = await GeminiService.getStudioV2Jobs();
       let jobs: StudioJob[] = res.jobs || [];
       setStudioJobs(jobs);
+      if (res.weeklyQuota) {
+        setWeeklyQuota(res.weeklyQuota);
+      }
       setIsLoadingJobs(false);
 
       // Drive active job via /tick so steps advance reliably even if serverless loopback HTTP fails
@@ -361,6 +372,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
         if (prev && (prev === 'queued' || prev === 'running') && prev !== j.status) {
           anyTransitioned = true;
           if (j.status === 'completed' || j.status === 'completed_with_issues') {
+            setSessionCompletedJobIds((curr) => (curr.includes(j.id) ? curr : [j.id, ...curr]));
             addNotification?.('content', 'Document ready', 'Your Academic Studio document finished generating.', 'studio');
             showToast('Your document is ready to preview and download.');
           } else if (j.status === 'failed') {
@@ -400,6 +412,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   }, [hasActiveStudioJob, userId]);
 
   const handleV2DraftOutline = async (brief: StudioBrief) => {
+    if (draftOutlineInFlightRef.current) return;
+    draftOutlineInFlightRef.current = true;
     setIsDraftingV2Outline(true);
     try {
       const res = await GeminiService.generateStudioV2Outline(brief);
@@ -409,12 +423,19 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     } catch (err: any) {
       showToast(err?.message || 'Could not draft outline.');
     } finally {
+      draftOutlineInFlightRef.current = false;
       setIsDraftingV2Outline(false);
     }
   };
 
   const handleV2StartJob = async () => {
     if (!v2Brief || v2Outline.length === 0 || isStartingV2Job) return;
+    if (weeklyQuota?.isBetaLimited && typeof weeklyQuota.remaining === 'number' && weeklyQuota.remaining <= 0) {
+      const msg = `Weekly Free Beta limit reached (${weeklyQuota.limit}/week). ${formatQuotaResetLabel(weeklyQuota.resetAt)}.`;
+      setV2JobStartError(msg);
+      showToast(msg);
+      return;
+    }
     if (hasActiveStudioJob) {
       const msg = 'You already have a document generating. Wait for it to finish or cancel it first.';
       setV2JobStartError(msg);
@@ -428,6 +449,9 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
       setV2View('list');
       setV2Brief(null);
       setV2Outline([]);
+      if (res.weeklyQuota) {
+        setWeeklyQuota(res.weeklyQuota);
+      }
       if (res.job) {
         previousJobStatusRef.current[res.job.id] = res.job.status;
         setStudioJobs((prev) => [res.job, ...prev.filter((j) => j.id !== res.job.id)]);
@@ -443,6 +467,15 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
         refreshStudioV2Jobs();
       }, 250);
     } catch (err: any) {
+      if (err?.code === 'STUDIO_WEEKLY_LIMIT_REACHED') {
+        setWeeklyQuota({
+          isBetaLimited: true,
+          limit: err.limit ?? 3,
+          used: err.used ?? 3,
+          remaining: 0,
+          resetAt: err.resetAt ?? null,
+        });
+      }
       const msg = err?.message || 'Could not start generation.';
       setV2JobStartError(msg);
       showToast(msg);
@@ -504,6 +537,15 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
         const blob = await generateDocxBlob(targetDoc);
         downloadDocx(blob, `${safeTitle}.docx`);
       }
+      // Mark exported timestamp silently so document cards consistently display 100% completion
+      const exportedDoc: AcademicDocument = {
+        ...activeDocument,
+        metadata: {
+          ...(activeDocument.metadata || {}),
+          lastExportedAt: new Date().toISOString(),
+        },
+      };
+      void persistDocument(exportedDoc);
       showToast(`Downloaded ${safeTitle}.${fmt}`);
     } catch {
       showToast('Download failed. Please try again.');
@@ -1596,6 +1638,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           userFiles={userFiles}
           initialBrief={v2Brief || undefined}
           isSubmitting={isDraftingV2Outline}
+          weeklyQuota={weeklyQuota}
           onCancel={() => setV2View('list')}
           onSubmit={handleV2DraftOutline}
         />
@@ -1613,6 +1656,15 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           }}
           onGenerate={handleV2StartJob}
           isStartingJob={isStartingV2Job || hasActiveStudioJob}
+          weeklyQuota={weeklyQuota}
+          onUpgradeClick={
+            BILLING_ENABLED
+              ? () => {
+                  setCheckoutPlan('studio');
+                  setShowCheckoutModal(true);
+                }
+              : undefined
+          }
           errorMessage={
             v2JobStartError ||
             (hasActiveStudioJob
@@ -1628,8 +1680,24 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           <div className="bg-white dark:bg-slate-900 rounded-xl p-6 border border-slate-200 dark:border-slate-800 shadow-xs">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
               <div className="space-y-1.5 max-w-2xl">
-                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 rounded-md text-[11px] font-semibold">
-                  <span>Academic Studio</span>
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 bg-blue-50 dark:bg-blue-950/60 text-blue-600 dark:text-blue-400 rounded-md text-[11px] font-semibold">
+                    <span>Academic Studio</span>
+                  </div>
+                  {weeklyQuota?.isBetaLimited && typeof weeklyQuota.limit === 'number' && typeof weeklyQuota.remaining === 'number' && (
+                    <span
+                      data-studio-weekly-quota-pill="true"
+                      className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium border ${
+                        weeklyQuota.remaining === 0
+                          ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 border-amber-200 dark:border-amber-800'
+                          : 'bg-[#F8FAFC] dark:bg-slate-800 text-[#5B6472] dark:text-slate-300 border-[#E5E7EB] dark:border-slate-700'
+                      }`}
+                    >
+                      {weeklyQuota.remaining === 0
+                        ? `0 of ${weeklyQuota.limit} left · ${formatQuotaResetLabel(weeklyQuota.resetAt)}`
+                        : `${weeklyQuota.remaining} of ${weeklyQuota.limit} weekly generations left`}
+                    </span>
+                  )}
                 </div>
                 <h1 className="text-xl sm:text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
                   Academic Documents &amp; Presentations
@@ -1651,30 +1719,91 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
             </div>
           </div>
 
-          {/* Background Jobs Progress Rows */}
-          {studioJobs.length > 0 && (
-            <div className="space-y-2.5">
-              {studioJobs.slice(0, 3).map((job) => {
-                const jobDoc = documents.find((d) => d.id === job.documentId);
-                return (
-                  <StudioJobProgress
-                    key={job.id}
-                    job={job}
-                    documentTitle={jobDoc?.title}
-                    draftedSections={jobDoc?.sections}
-                    retrievalWarnings={(jobDoc?.metadata as any)?.retrievalWarnings}
-                    onCancel={handleV2CancelJob}
-                    onResume={handleV2ResumeJob}
-                    onDeleteDocument={handleDeleteDocument}
-                    onOpenDocument={(docId) => {
-                      setActiveVariant('primary');
-                      setActiveDocId(docId);
+          {/* Slim Single-Line Status Strip (Active job OR at most 1 freshly finished job in current session) */}
+          {(() => {
+            const homeBar = selectStudioHomeStatusBar({
+              jobs: studioJobs,
+              sessionCompletedJobIds,
+              dismissedJobIds: dismissedHomeJobIds,
+            });
+            if (!homeBar) return null;
+            const { mode, job } = homeBar;
+            const jobDoc = documents.find((d) => d.id === job.documentId);
+            const shortTitle = (jobDoc?.title || 'Document').length > 48
+              ? `${(jobDoc?.title || 'Document').slice(0, 45)}...`
+              : (jobDoc?.title || 'Document');
+            const activeStepLabel = job.plan?.[job.currentStep]?.label || 'Working';
+            const verb =
+              job.jobKind === 'convert_to_slides'
+                ? 'Converting to slides'
+                : job.jobKind === 'convert_to_document'
+                ? 'Converting to document'
+                : 'Generating';
+
+            if (mode === 'active') {
+              return (
+                <div
+                  data-studio-home-status-bar="active"
+                  className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg py-2 px-3 flex items-center justify-between gap-3 text-xs"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span className="w-3.5 h-3.5 border-2 border-[#2563EB] border-t-transparent rounded-full animate-spin shrink-0" />
+                    <span className="text-[#111827] dark:text-slate-100 truncate">
+                      <strong className="font-semibold">{verb}:</strong> {shortTitle}{' '}
+                      <span className="text-[#5B6472] dark:text-slate-400">— {activeStepLabel}...</span>
+                    </span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setActiveVariant(job.jobKind === 'convert_to_slides' ? 'slides' : 'primary');
+                      setActiveDocId(job.documentId);
                     }}
-                  />
-                );
-              })}
-            </div>
-          )}
+                    className="text-xs font-semibold text-[#2563EB] hover:underline shrink-0 cursor-pointer px-1.5 py-1"
+                  >
+                    View
+                  </button>
+                </div>
+              );
+            }
+
+            return (
+              <div
+                data-studio-home-status-bar="fresh_completed"
+                className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg py-2 px-3 flex items-center justify-between gap-3 text-xs"
+              >
+                <div className="flex items-center gap-2 min-w-0">
+                  <CheckCircle2 size={14} className="text-emerald-600 shrink-0" />
+                  <span className="text-[#111827] dark:text-slate-100 truncate">
+                    <strong className="font-semibold">Ready:</strong> {shortTitle}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2 shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setDismissedHomeJobIds((prev) => (prev.includes(job.id) ? prev : [...prev, job.id]));
+                      setActiveVariant(job.jobKind === 'convert_to_slides' ? 'slides' : 'primary');
+                      setActiveDocId(job.documentId);
+                    }}
+                    className="text-xs font-semibold text-[#2563EB] hover:underline cursor-pointer px-1.5 py-1"
+                  >
+                    Open
+                  </button>
+                  <button
+                    type="button"
+                    aria-label="Dismiss status notice"
+                    onClick={() =>
+                      setDismissedHomeJobIds((prev) => (prev.includes(job.id) ? prev : [...prev, job.id]))
+                    }
+                    className="p-1 text-[#5B6472] hover:text-[#111827] dark:hover:text-white rounded cursor-pointer"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+              </div>
+            );
+          })()}
 
           {/* Search, Filter & Quick Action Bar */}
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
@@ -1744,9 +1873,12 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {filteredDocuments.map((doc) => {
-                const progressPct = Math.min(100, Math.round(((doc.currentWordCount || 0) / (doc.targetWordCount || 1)) * 100));
+                const docHasActiveJob = studioJobs.some(
+                  (j) => j.documentId === doc.id && (j.status === 'queued' || j.status === 'running')
+                );
+                const cardProgress = computeDocumentCardProgress(doc, docHasActiveJob);
                 const statusColor =
-                  doc.status === 'completed'
+                  cardProgress.isComplete || doc.status === 'completed'
                     ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
                     : doc.status === 'review'
                     ? 'bg-amber-50 text-amber-700 border-amber-200'
@@ -1757,6 +1889,8 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                 return (
                   <div
                     key={doc.id}
+                    data-studio-doc-card={doc.id}
+                    data-doc-progress-pct={cardProgress.percent}
                     onClick={() => setActiveDocId(doc.id)}
                     className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-xl p-5 shadow-xs hover:border-blue-300 dark:hover:border-blue-700 transition-all flex flex-col justify-between group cursor-pointer"
                   >
@@ -1785,13 +1919,15 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
                     <div className="space-y-2 pt-4 mt-4 border-t border-slate-100 dark:border-slate-800">
                       <div className="space-y-1">
                         <div className="flex items-center justify-between text-xs text-slate-500">
-                          <span>{doc.currentWordCount.toLocaleString()} / {doc.targetWordCount.toLocaleString()} words</span>
-                          <span className="font-semibold text-slate-700 dark:text-slate-300">{progressPct}%</span>
+                          <span>{cardProgress.wordLabel}</span>
+                          <span className="font-semibold text-slate-700 dark:text-slate-300 tabular-nums">{cardProgress.percent}%</span>
                         </div>
                         <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
                           <div
-                            className="h-full bg-blue-600 rounded-full transition-all duration-300"
-                            style={{ width: `${progressPct}%` }}
+                            className={`h-full rounded-full transition-all duration-300 ${
+                              cardProgress.isComplete ? 'bg-emerald-600' : 'bg-[#2563EB]'
+                            }`}
+                            style={{ width: `${cardProgress.percent}%` }}
                           />
                         </div>
                       </div>

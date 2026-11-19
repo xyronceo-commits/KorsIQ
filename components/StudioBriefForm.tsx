@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { Upload, Loader2, FileText, ArrowRight, ArrowLeft } from 'lucide-react';
 import {
   AcademicDocumentType,
@@ -9,12 +9,13 @@ import {
   StudioBrief,
   StudioFileFormat,
   StudioLengthUnit,
+  StudioWeeklyQuota,
   UserFile,
   UserProfile,
 } from '../types';
 import { NIGERIAN_UNIVERSITIES } from '../utils/nigerianUniversities';
 import { GeminiService } from '../services/gemini';
-import { STUDIO_V2_LIMITS } from '../lib/studioV2';
+import { formatQuotaResetLabel, STUDIO_V2_LIMITS } from '../lib/studioV2';
 import {
   DEFAULT_SLIDE_TEMPLATE_ID,
   documentTemplateToLegacyStyle,
@@ -29,8 +30,9 @@ interface StudioBriefFormProps {
   userFiles: UserFile[];
   initialBrief?: Partial<StudioBrief>;
   isSubmitting: boolean;
+  weeklyQuota?: StudioWeeklyQuota | null;
   onCancel: () => void;
-  onSubmit: (brief: StudioBrief) => void;
+  onSubmit: (brief: StudioBrief) => void | Promise<void>;
 }
 
 const DOC_TYPES: Array<{ id: AcademicDocumentType; label: string; defaultLength: number; unit: StudioLengthUnit }> = [
@@ -52,6 +54,7 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
   userFiles,
   initialBrief,
   isSubmitting,
+  weeklyQuota,
   onCancel,
   onSubmit,
 }) => {
@@ -86,9 +89,32 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
   const [uploadedMaterialIds, setUploadedMaterialIds] = useState<string[]>(initialBrief?.uploadedMaterialIds || []);
   const [isReadingFile, setIsReadingFile] = useState(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [localSubmitting, setLocalSubmitting] = useState(false);
+  const submittingRef = useRef(false);
+  const titleInputRef = useRef<HTMLInputElement>(null);
+  const errorBannerRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  useEffect(() => {
+    if (!isSubmitting) {
+      submittingRef.current = false;
+      setLocalSubmitting(false);
+    }
+  }, [isSubmitting]);
+
+  const effectiveSubmitting = isSubmitting || localSubmitting;
   const isSlideMode = fileFormat === 'pptx' || docType === 'presentation';
+
+  const handleLengthUnitChange = (nextUnit: StudioLengthUnit) => {
+    setLengthUnit(nextUnit);
+    if (nextUnit === 'pages' && targetLength > 100) {
+      setTargetLength(10);
+    } else if (nextUnit === 'slides' && targetLength > 100) {
+      setTargetLength(12);
+    } else if (nextUnit === 'words' && targetLength < 100) {
+      setTargetLength(1500);
+    }
+  };
 
   const handleDocTypeChange = (nextType: AcademicDocumentType) => {
     setDocType(nextType);
@@ -158,51 +184,84 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
     );
   };
 
-  const handleSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitBrief = async () => {
+    if (submittingRef.current || isSubmitting) return;
     if (!title.trim()) {
       setErrorMsg('Please enter a document title.');
+      titleInputRef.current?.focus();
+      errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
+    const maxAllowed = lengthUnit === 'words' ? STUDIO_V2_LIMITS.maxTargetWords : 100;
+    const normalizedTarget = Math.min(maxAllowed, Math.max(1, Number(targetLength) || 1));
     if (lengthUnit === 'words' && targetLength > STUDIO_V2_LIMITS.maxTargetWords) {
       setErrorMsg(`Target length cannot exceed ${STUDIO_V2_LIMITS.maxTargetWords.toLocaleString()} words.`);
+      errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
     setErrorMsg(null);
-    onSubmit({
-      title: title.trim(),
-      docType,
-      courseCode: courseCode.trim(),
-      courseTitle: courseTitle.trim(),
-      supervisorName: supervisorName.trim(),
-      studentName: studentName.trim(),
-      matricNumber: matricNumber.trim(),
-      department: department.trim(),
-      faculty: faculty.trim(),
-      institution: institution.trim(),
-      date: date.trim(),
-      instructions: instructions.trim(),
-      citationStyle,
-      targetLength,
-      lengthUnit,
-      documentStyle: documentTemplateToLegacyStyle(documentTemplateId),
-      documentTemplateId,
-      slideTemplateId,
-      spacing,
-      visualsEnabled,
-      fileFormat,
-      pastedReferences: pastedReferences.trim() || undefined,
-      uploadedMaterialIds,
-    });
+    submittingRef.current = true;
+    setLocalSubmitting(true);
+    try {
+      await onSubmit({
+        title: title.trim(),
+        docType,
+        courseCode: courseCode.trim(),
+        courseTitle: courseTitle.trim(),
+        supervisorName: supervisorName.trim(),
+        studentName: studentName.trim(),
+        matricNumber: matricNumber.trim(),
+        department: department.trim(),
+        faculty: faculty.trim(),
+        institution: institution.trim(),
+        date: date.trim(),
+        instructions: instructions.trim(),
+        citationStyle,
+        targetLength: normalizedTarget,
+        lengthUnit,
+        documentStyle: documentTemplateToLegacyStyle(documentTemplateId),
+        documentTemplateId,
+        slideTemplateId,
+        spacing,
+        visualsEnabled,
+        fileFormat,
+        pastedReferences: pastedReferences.trim() || undefined,
+        uploadedMaterialIds,
+      });
+    } finally {
+      submittingRef.current = false;
+      setLocalSubmitting(false);
+    }
+  };
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    void submitBrief();
   };
 
   return (
-    <form onSubmit={handleSubmit} className="max-w-3xl mx-auto space-y-6 pb-12">
-      <div className="flex items-center justify-between border-b border-[#E5E7EB] dark:border-slate-800 pb-4">
+    <form noValidate onSubmit={handleSubmit} className="max-w-3xl mx-auto space-y-6 pb-12">
+      <div className="flex flex-wrap items-center justify-between gap-3 border-b border-[#E5E7EB] dark:border-slate-800 pb-4">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-[#111827] dark:text-white">
-            New Document Brief
-          </h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-xl sm:text-2xl font-bold text-[#111827] dark:text-white">
+              New Document Brief
+            </h1>
+            {weeklyQuota?.isBetaLimited && typeof weeklyQuota.limit === 'number' && typeof weeklyQuota.remaining === 'number' && (
+              <span
+                data-studio-weekly-quota-pill="true"
+                className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-[11px] font-medium border ${
+                  weeklyQuota.remaining === 0
+                    ? 'bg-amber-50 dark:bg-amber-950/40 text-amber-800 dark:text-amber-200 border-amber-200 dark:border-amber-800'
+                    : 'bg-[#EFF6FF] dark:bg-blue-950/50 text-[#1746A2] dark:text-blue-200 border-blue-200/70 dark:border-blue-900'
+                }`}
+              >
+                {weeklyQuota.remaining === 0
+                  ? `0 of ${weeklyQuota.limit} left · ${formatQuotaResetLabel(weeklyQuota.resetAt)}`
+                  : `${weeklyQuota.remaining} of ${weeklyQuota.limit} weekly generations left`}
+              </span>
+            )}
+          </div>
           <p className="text-xs sm:text-sm text-[#5B6472] dark:text-slate-400 mt-0.5">
             Fill in your brief once. You will review the outline before anything is written.
           </p>
@@ -218,7 +277,11 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
       </div>
 
       {errorMsg && (
-        <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-xs font-medium">
+        <div
+          ref={errorBannerRef}
+          role="alert"
+          className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-xs font-medium"
+        >
           {errorMsg}
         </div>
       )}
@@ -232,6 +295,7 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
             Title or Topic *
           </label>
           <input
+            ref={titleInputRef}
             type="text"
             required
             value={title}
@@ -473,7 +537,7 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
             <label className="block text-xs font-medium text-[#111827] dark:text-slate-200 mb-1">Length Unit</label>
             <select
               value={lengthUnit}
-              onChange={(e) => setLengthUnit(e.target.value as StudioLengthUnit)}
+              onChange={(e) => handleLengthUnitChange(e.target.value as StudioLengthUnit)}
               className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 rounded-lg text-sm min-h-[44px]"
             >
               <option value="words">Words (max {STUDIO_V2_LIMITS.maxTargetWords.toLocaleString()})</option>
@@ -608,12 +672,17 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
         </button>
         <button
           type="submit"
-          disabled={isSubmitting}
+          data-draft-outline-btn="true"
+          disabled={effectiveSubmitting}
+          onMouseDown={(e) => {
+            // Prevent blur-induced layout shifts (e.g. datalist/keyboard collapse) from swallowing the first click
+            e.preventDefault();
+          }}
           className="inline-flex items-center gap-2 px-5 py-2.5 bg-[#2563EB] hover:bg-[#1746A2] disabled:opacity-60 text-white rounded-lg text-sm font-semibold min-h-[44px] cursor-pointer"
         >
-          {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : null}
-          <span>{isSubmitting ? 'Drafting outline...' : 'Draft Outline'}</span>
-          {!isSubmitting && <ArrowRight size={16} />}
+          {effectiveSubmitting ? <Loader2 size={16} className="animate-spin" /> : null}
+          <span>{effectiveSubmitting ? 'Drafting outline...' : 'Draft Outline'}</span>
+          {!effectiveSubmitting && <ArrowRight size={16} />}
         </button>
       </div>
     </form>

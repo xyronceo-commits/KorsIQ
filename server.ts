@@ -50,6 +50,8 @@ import {
 } from './lib/uploadSecurity';
 import {
   buildStudioJobPlan,
+  computeWeeklyStudioQuota,
+  isBetaLimitedStudioUser,
   isJobLeaseExpired,
   isStudioKillSwitchEnabled,
   STUDIO_V2_LIMITS,
@@ -4451,6 +4453,59 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
   // ACADEMIC STUDIO V2: BRIEF -> OUTLINE -> BACKGROUND JOB ENGINE
   // ==========================================
 
+  /**
+   * Computes a user's rolling 7-day Academic Studio generation quota from `studio_jobs`.
+   * Applies the 3/week beta cap ONLY to Free Beta users (never paid subscribers or admins).
+   */
+  const getWeeklyStudioQuotaForUser = async (uid: string, email?: string | null) => {
+    const windowDays = FREE_BETA_LIMITS.weeklyStudioWindowDays;
+    const limit = FREE_BETA_LIMITS.weeklyStudioGenerationsLimit;
+    const cutoffIso = new Date(Date.now() - windowDays * 24 * 60 * 60 * 1000).toISOString();
+
+    if (!supabaseAdmin) {
+      return computeWeeklyStudioQuota({
+        jobs: [],
+        isBetaLimited: !BILLING_ENABLED,
+        limit,
+        windowDays,
+      });
+    }
+
+    const [adminRecord, profileRes, jobsRes] = await Promise.all([
+      email ? findAuthorizedAdmin(email).catch(() => null) : Promise.resolve(null),
+      supabaseAdmin
+        .from('profiles')
+        .select('tier, is_pro, subscription_tier, subscription_status, subscription_end')
+        .eq('id', uid)
+        .maybeSingle(),
+      supabaseAdmin
+        .from('studio_jobs')
+        .select('job_kind, status, created_at')
+        .eq('user_id', uid)
+        .eq('job_kind', 'generate')
+        .in('status', ['queued', 'running', 'completed', 'completed_with_issues'])
+        .gte('created_at', cutoffIso),
+    ]);
+
+    const profileRow = profileRes.data;
+    const isBetaLimited = isBetaLimitedStudioUser({
+      billingEnabled: BILLING_ENABLED,
+      tier: profileRow?.tier,
+      subscriptionTier: profileRow?.subscription_tier,
+      isPro: profileRow?.is_pro,
+      subscriptionStatus: profileRow?.subscription_status,
+      subscriptionEnd: profileRow?.subscription_end,
+      isAdmin: Boolean(adminRecord),
+    });
+
+    return computeWeeklyStudioQuota({
+      jobs: jobsRes.data || [],
+      isBetaLimited,
+      limit,
+      windowDays,
+    });
+  };
+
   app.post('/api/studio/v2/outline', requireAuth, requirePaidTier(['plus', 'studio', 'scholar', 'sage']), apiRateLimiter, async (req: AuthenticatedRequest, res) => {
     const brief = req.body?.brief;
     if (!brief || !String(brief.title || '').trim()) {
@@ -4495,8 +4550,27 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
         maxOutputTokens: 2048,
       });
 
-      const parsed = JSON.parse(raw || '{}');
+      const cleanedRaw = String(raw || '')
+        .trim()
+        .replace(/^```(?:json)?\s*/i, '')
+        .replace(/\s*```$/i, '')
+        .trim();
+      let parsed: any = {};
+      try {
+        parsed = JSON.parse(cleanedRaw || '{}');
+      } catch {
+        const startBrace = cleanedRaw.indexOf('{');
+        const endBrace = cleanedRaw.lastIndexOf('}');
+        if (startBrace !== -1 && endBrace > startBrace) {
+          parsed = JSON.parse(cleanedRaw.slice(startBrace, endBrace + 1));
+        } else {
+          throw new Error('Model returned non-JSON outline output.');
+        }
+      }
       const items = Array.isArray(parsed.outline) ? parsed.outline : [];
+      if (items.length === 0) {
+        throw new Error('Model returned an empty outline.');
+      }
       const outline = items.map((item: any, idx: number) => ({
         id: String(item.id || `sec_${idx + 1}`),
         title: String(item.title || `Section ${idx + 1}`),
@@ -4531,7 +4605,7 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
     const todayStartIso = `${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`;
 
     try {
-      const [activeRes, dailyRes] = await Promise.all([
+      const [activeRes, dailyRes, weeklyQuota] = await Promise.all([
         supabaseAdmin
           .from('studio_jobs')
           .select('id', { count: 'exact', head: true })
@@ -4542,6 +4616,7 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
           .select('id', { count: 'exact', head: true })
           .eq('user_id', uid)
           .gte('created_at', todayStartIso),
+        getWeeklyStudioQuotaForUser(uid, req.user?.email),
       ]);
 
       if (activeRes.error) {
@@ -4552,6 +4627,18 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
             error: 'Database migration required: please apply supabase/migrations/20261118_studio_v2_jobs.sql in Supabase.',
           });
         }
+      }
+
+      if (weeklyQuota.isBetaLimited && (weeklyQuota.remaining ?? 0) <= 0) {
+        return res.status(429).json({
+          success: false,
+          code: 'STUDIO_WEEKLY_LIMIT_REACHED',
+          error: `You have used all ${weeklyQuota.limit} weekly Academic Studio generations for Free Beta.`,
+          limit: weeklyQuota.limit,
+          used: weeklyQuota.used,
+          remaining: 0,
+          resetAt: weeklyQuota.resetAt,
+        });
       }
 
       const limitCheck = validateStudioLimits({
@@ -4675,7 +4762,25 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
         },
       });
 
-      return res.json({ success: true, job: rowToStudioJob(jobRow), documentId: docId });
+      const updatedQuota = weeklyQuota.isBetaLimited
+        ? {
+            ...weeklyQuota,
+            used: weeklyQuota.used + 1,
+            remaining: Math.max(0, (weeklyQuota.limit ?? 3) - (weeklyQuota.used + 1)),
+            resetAt:
+              weeklyQuota.resetAt ||
+              new Date(
+                Date.now() + FREE_BETA_LIMITS.weeklyStudioWindowDays * 24 * 60 * 60 * 1000
+              ).toISOString(),
+          }
+        : weeklyQuota;
+
+      return res.json({
+        success: true,
+        job: rowToStudioJob(jobRow),
+        documentId: docId,
+        weeklyQuota: updatedQuota,
+      });
     } catch (err: any) {
       const msg = String(err?.message || err || '');
       console.error('[StudioV2] Create job error:', msg);
@@ -4773,19 +4878,29 @@ Maintain formal academic diction, clear syntax, and objective reasoning. Return 
   });
 
   app.get('/api/studio/v2/jobs', requireAuth, async (req: AuthenticatedRequest, res) => {
-    if (!supabaseAdmin) return res.json({ success: true, jobs: [] });
+    if (!supabaseAdmin) {
+      const fallbackQuota = await getWeeklyStudioQuotaForUser(req.user!.uid, req.user?.email);
+      return res.json({ success: true, jobs: [], weeklyQuota: fallbackQuota });
+    }
     const uid = req.user!.uid;
-    const { data, error } = await supabaseAdmin
-      .from('studio_jobs')
-      .select('*')
-      .eq('user_id', uid)
-      .order('created_at', { ascending: false })
-      .limit(10);
+    const [jobsRes, weeklyQuota] = await Promise.all([
+      supabaseAdmin
+        .from('studio_jobs')
+        .select('*')
+        .eq('user_id', uid)
+        .order('created_at', { ascending: false })
+        .limit(10),
+      getWeeklyStudioQuotaForUser(uid, req.user?.email),
+    ]);
 
-    if (error) {
+    if (jobsRes.error) {
       return res.status(500).json({ success: false, error: 'Failed to load jobs' });
     }
-    return res.json({ success: true, jobs: (data || []).map(rowToStudioJob) });
+    return res.json({
+      success: true,
+      jobs: (jobsRes.data || []).map(rowToStudioJob),
+      weeklyQuota,
+    });
   });
 
   app.get('/api/studio/v2/jobs/:id', requireAuth, async (req: AuthenticatedRequest, res) => {

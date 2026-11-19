@@ -36,6 +36,8 @@ export const FREE_BETA_LIMITS = {
   maxCirclesCreate: 3,
   maxCirclesJoin: 10,
   dailyAiRequestsLimit: 300,
+  weeklyStudioGenerationsLimit: 3,
+  weeklyStudioWindowDays: 7,
 } as const;
 
 export interface PlanConfig {

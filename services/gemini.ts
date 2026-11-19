@@ -148,6 +148,10 @@ async function safeFetchJson(url: string, options: RequestInit, fallbackErrorMes
           errObj.required = data.required;
           errObj.allowance = data.allowance;
           errObj.resetDate = data.resetDate;
+          errObj.limit = data.limit;
+          errObj.used = data.used;
+          errObj.remaining = data.remaining;
+          errObj.resetAt = data.resetAt;
         }
         throw errObj;
       }
@@ -731,6 +735,7 @@ export const GeminiService = {
     success: boolean;
     job: any;
     documentId: string;
+    weeklyQuota?: any;
   }> {
     return await safeFetchJson('/api/studio/v2/jobs', {
       method: 'POST',
@@ -739,7 +744,7 @@ export const GeminiService = {
     }, 'Failed to start generation job.');
   },
 
-  async getStudioV2Jobs(): Promise<{ success: boolean; jobs: any[] }> {
+  async getStudioV2Jobs(): Promise<{ success: boolean; jobs: any[]; weeklyQuota?: any }> {
     return await safeFetchJson('/api/studio/v2/jobs', {
       method: 'GET',
       headers: await getHeaders(),

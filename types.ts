@@ -756,6 +756,14 @@ export interface StudioVersion {
   notes?: string;
 }
 
+export interface StudioWeeklyQuota {
+  isBetaLimited: boolean;
+  limit: number | null;
+  used: number;
+  remaining: number | null;
+  resetAt: string | null;
+}
+
 export interface AcademicDocumentMetadata {
   studentName?: string;
   studentId?: string;
@@ -776,6 +784,7 @@ export interface AcademicDocumentMetadata {
   visualPreferences?: StudioVisualPreferences;
   documentTemplateId?: DocumentTemplateId;
   slideTemplateId?: SlideTemplateId;
+  lastExportedAt?: string;
 }
 
 export interface AcademicDocument {
