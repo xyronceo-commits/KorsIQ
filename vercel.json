@@ -101,32 +101,7 @@
       ]
     }
   ],
-  "redirects": [
-    {
-      "source": "/(.*)",
-      "has": [
-        {
-          "type": "host",
-          "value": "www.korsiq.com.ng"
-        }
-      ],
-      "destination": "https://korsiq.com.ng/$1",
-      "permanent": true
-    }
-  ],
   "rewrites": [
-    {
-      "source": "/sitemap.xml",
-      "destination": "/sitemap.xml"
-    },
-    {
-      "source": "/robots.txt",
-      "destination": "/robots.txt"
-    },
-    {
-      "source": "/manifest.json",
-      "destination": "/manifest.json"
-    },
     {
       "source": "/api/(.*)",
       "destination": "/api/index"
