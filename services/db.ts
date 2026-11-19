@@ -30,6 +30,37 @@ const SIGNED_URL_TTL_SECONDS = 60 * 60;
 // ---------- local cache helpers (offline fallback, scoped per user) ----------
 const cacheKey = (kind: string, userId: string) => `scolaris_user_private_v1_${kind}_${userId}`;
 
+const inflightQueries = new Map<string, Promise<any>>();
+const shortTtlCache = new Map<string, { ts: number; data: any }>();
+const SHORT_TTL_MS = 20_000;
+
+function withShortTtl<T>(key: string, fetcher: () => Promise<T>): Promise<T> {
+  const cached = shortTtlCache.get(key);
+  if (cached && Date.now() - cached.ts < SHORT_TTL_MS) {
+    return Promise.resolve(cached.data as T);
+  }
+  const existing = inflightQueries.get(key);
+  if (existing) return existing as Promise<T>;
+  const promise = fetcher()
+    .then((res) => {
+      shortTtlCache.set(key, { ts: Date.now(), data: res });
+      inflightQueries.delete(key);
+      return res;
+    })
+    .catch((err) => {
+      inflightQueries.delete(key);
+      throw err;
+    });
+  inflightQueries.set(key, promise);
+  return promise;
+}
+
+function invalidateShortTtl(prefix: string) {
+  for (const key of shortTtlCache.keys()) {
+    if (key.startsWith(prefix)) shortTtlCache.delete(key);
+  }
+}
+
 function readCache<T>(kind: string, userId: string, fallback: T): T {
   try {
     const raw = localStorage.getItem(cacheKey(kind, userId));
@@ -299,6 +330,23 @@ function buildCourseRow(userId: string, course: Course, includeOptional = true, 
 }
 
 export const DBService = {
+  /** Synchronous local cache snapshot for instant cold-start hydration on mobile/APK. */
+  readUserCacheSnapshot(userId: string): {
+    profile: UserProfile | null;
+    courses: Course[];
+    schedule: StudySession[];
+    hubs: Record<string, StudyHubData>;
+    groups: StudyGroup[];
+  } {
+    return {
+      profile: readCache<UserProfile | null>('profile', userId, null),
+      courses: readCache<Course[]>('courses', userId, []),
+      schedule: readCache<StudySession[]>('schedule', userId, []),
+      hubs: readCache<Record<string, StudyHubData>>('hubs', userId, {}),
+      groups: readCache<StudyGroup[]>('groups', userId, []),
+    };
+  },
+
   // ---------------- Profiles ----------------
   async getProfile(userId: string): Promise<UserProfile | null> {
     try {
@@ -2596,6 +2644,8 @@ export const DBService = {
   },
 
   clearUserCache(userId?: string): void {
+    shortTtlCache.clear();
+    inflightQueries.clear();
     try {
       const toRemove: string[] = [];
       for (let i = 0; i < localStorage.length; i++) {
@@ -2985,6 +3035,7 @@ export const DBService = {
   // ==========================================
 
   async getAcademicDocuments(userId: string): Promise<AcademicDocument[]> {
+    return withShortTtl(`academic_docs:${userId}`, async () => {
     try {
       const cached = readCache<AcademicDocument[]>('academic_docs', userId, []);
       const { data, error } = await supabase
@@ -3028,6 +3079,7 @@ export const DBService = {
       console.warn('getAcademicDocuments fallback to cache:', err);
       return readCache<AcademicDocument[]>('academic_docs', userId, []);
     }
+    });
   },
 
   async getAcademicDocument(docId: string, userId: string): Promise<AcademicDocument | null> {
@@ -3079,6 +3131,7 @@ export const DBService = {
   },
 
   async saveAcademicDocument(doc: AcademicDocument): Promise<AcademicDocument> {
+    invalidateShortTtl(`academic_docs:${doc.userId}`);
     const now = new Date().toISOString();
     const updatedDoc: AcademicDocument = {
       ...doc,
@@ -3234,6 +3287,7 @@ export const DBService = {
     const cached = readCache<AcademicTask[]>('academic_tasks', userId, []);
     if (!userId) return cached;
 
+    return withShortTtl(`academic_tasks:${userId}`, async () => {
     try {
       const { data, error } = await supabase
         .from('academic_tasks')
@@ -3272,12 +3326,14 @@ export const DBService = {
       console.warn('getTasks exception fallback:', err);
       return cached;
     }
+    });
   },
 
   async createTask(
     userId: string,
     taskData: Omit<AcademicTask, 'id' | 'userId' | 'createdAt' | 'updatedAt'>
   ): Promise<AcademicTask> {
+    invalidateShortTtl(`academic_tasks:${userId}`);
     const taskId = crypto.randomUUID();
     const now = new Date().toISOString();
 
@@ -3335,6 +3391,7 @@ export const DBService = {
     taskId: string,
     updates: Partial<AcademicTask>
   ): Promise<AcademicTask | null> {
+    invalidateShortTtl(`academic_tasks:${userId}`);
     const cached = readCache<AcademicTask[]>('academic_tasks', userId, []);
     const existing = cached.find((t) => t.id === taskId);
     const now = new Date().toISOString();
@@ -3378,6 +3435,7 @@ export const DBService = {
   },
 
   async deleteTask(userId: string, taskId: string): Promise<boolean> {
+    invalidateShortTtl(`academic_tasks:${userId}`);
     const cached = readCache<AcademicTask[]>('academic_tasks', userId, []);
     writeCache(
       'academic_tasks',

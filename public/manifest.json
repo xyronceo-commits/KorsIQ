@@ -6,8 +6,8 @@
   "id": "/",
   "display": "standalone",
   "orientation": "any",
-  "background_color": "#020617",
-  "theme_color": "#312e81",
+  "background_color": "#F8FAFC",
+  "theme_color": "#2563EB",
   "icons": [
     {
       "src": "/korsiq-logo-192.png",
