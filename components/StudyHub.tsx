@@ -1,8 +1,8 @@
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Course, StudyHubData, StudyHubHistoryItem, StudyHubToolType, LibraryFile, Flashcard, QuizQuestion, StudyGroup, UserProfile, GroupMessage, AppNotification, AppState, UserFile } from '../types';
+import { Course, StudyHubData, StudyHubHistoryItem, StudyHubToolType, LibraryFile, Flashcard, StudyGroup, UserProfile, GroupMessage, UserFile } from '../types';
 import { ICONS } from '../constants';
-import { BookOpen as Sparkles, AudioWaveform, ChevronLeft, ChevronRight, RefreshCw, Layers, Grid, Check, X, HelpCircle, Trophy, Award, RotateCcw, Trash2, Folder, Download, Upload, Loader2, AlertCircle, FileText, File, ScanText, Camera, Image, FileSearch, CheckCircle2, ArrowUpRight, BookOpen, Plus, MessageSquare, Link as LinkIcon, Play, Pause, Square, History, Volume2 } from 'lucide-react';
+import { BookOpen as Sparkles, AudioWaveform, ChevronLeft, ChevronRight, RefreshCw, Layers, Grid, Check, X, HelpCircle, Trophy, Award, RotateCcw, Trash2, Folder, Download, Upload, Loader2, AlertCircle, FileText, File, ScanText, Camera, FileSearch, CheckCircle2, ArrowUpRight, BookOpen, Plus, MessageSquare, Link as LinkIcon, Play, Pause, Square, History, Volume2 } from 'lucide-react';
 import { BILLING_ENABLED } from '../lib/plans';
 import { GeminiService } from '../services/gemini';
 import { DBService } from '../services/db';

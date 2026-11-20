@@ -1,4 +1,4 @@
-import { getCurrentUserId, getAccessToken } from '../lib/supabase';
+import { getAccessToken } from '../lib/supabase';
 
 // Standard decoding for binary audio
 function decode(base64: string) {

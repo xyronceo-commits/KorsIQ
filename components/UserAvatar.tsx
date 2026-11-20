@@ -1,7 +1,6 @@
 import React from 'react';
 import { 
   GraduationCap, 
-  User, 
   UserCircle, 
   Target, 
   Bookmark, 
@@ -9,7 +8,6 @@ import {
   Crown, 
   Microscope, 
   BookOpen,
-  Award
 } from 'lucide-react';
 
 export interface AvatarOption {

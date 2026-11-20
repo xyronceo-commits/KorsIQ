@@ -40,7 +40,6 @@ export default defineConfig(({ mode }) => {
               'vendor-react': ['react', 'react-dom'],
               'vendor-supabase': ['@supabase/supabase-js'],
               'vendor-exports': ['jspdf', 'pptxgenjs', 'jszip'],
-              'vendor-charts': ['recharts'],
               'vendor-motion': ['motion'],
               'vendor-markdown': ['react-markdown'],
             },

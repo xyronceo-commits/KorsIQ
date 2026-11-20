@@ -2,7 +2,7 @@ import React, { useState, useEffect, useRef, lazy, Suspense } from 'react';
 import { Course, UserProfile, StudySession, AppState, StudyHubData, StudyGroup, AppNotification } from './types';
 import { ICONS } from './constants';
 import { BILLING_ENABLED, getPlanDisplayName } from './lib/plans';
-import { GraduationCap, Menu, X, Lock, Sun, Moon, CheckCheck, Trash2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
+import { GraduationCap, X, Sun, Moon, CheckCheck, Trash2, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import Dashboard from './components/Dashboard';
 import { UserAvatar } from './components/UserAvatar';
 import Auth, { type AuthMode } from './components/Auth';
@@ -15,14 +15,10 @@ import KorsIQLogo from './components/KorsIQLogo';
 import LandingPage from './components/LandingPage';
 
 const Onboarding = lazy(() => import('./components/Onboarding'));
-const CourseManager = lazy(() => import('./components/CourseManager'));
-const ScheduleView = lazy(() => import('./components/ScheduleView'));
 const StudyHub = lazy(() => import('./components/StudyHub'));
 const StudyGroups = lazy(() => import('./components/StudyGroups'));
-const CGPACalculator = lazy(() => import('./components/CGPACalculator'));
 const AcademicStudio = lazy(() => import('./components/AcademicStudio'));
 const PomodoroTimer = lazy(() => import('./components/PomodoroTimer'));
-const TimetableView = lazy(() => import('./components/TimetableView'));
 const Profile = lazy(() => import('./components/Profile'));
 const Tutorial = lazy(() => import('./components/Tutorial'));
 const StudyPlannerView = lazy(() => import('./components/StudyPlannerView'));
@@ -105,7 +101,6 @@ const App: React.FC = () => {
     }
   });
   const [selectedCourseId, setSelectedCourseId] = useState<string | null>(null);
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isStudioFocusMode, setIsStudioFocusMode] = useState(false);
   const [sidebarManualOverride, setSidebarManualOverride] = useState<'collapsed' | 'expanded' | null>(null);
 
@@ -627,21 +622,6 @@ const App: React.FC = () => {
       DBService.saveSchedule(authUser.uid, schedule);
     }
   }, [schedule, profile?.onboarded, authUser?.uid]);
-
-  // Mobile responsiveness
-  useEffect(() => {
-    const handleResize = () => {
-      if (window.innerWidth < 1024) {
-        setIsSidebarOpen(false);
-      } else {
-        setIsSidebarOpen(true);
-      }
-    };
-
-    window.addEventListener('resize', handleResize);
-    handleResize();
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
 
   // Notifications for Upcoming Sessions
   useEffect(() => {

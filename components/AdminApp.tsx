@@ -5,7 +5,6 @@ import {
   ShieldCheck, 
   Mail, 
   ArrowRight, 
-  Lock, 
   LogOut, 
   Users, 
   CreditCard, 
@@ -16,8 +15,6 @@ import {
   AlertCircle, 
   Loader2, 
   RotateCcw, 
-  ChevronRight, 
-  Calendar,
   DollarSign,
   Trash2,
   ExternalLink

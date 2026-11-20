@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   UserProfile, 
   StudyGroup, 
@@ -6,21 +6,18 @@ import {
   AppNotification, 
   AppState, 
   GroupDiscussionPost, 
-  GroupDiscussionReply,
   GroupMember
 } from '../types';
 import { checkLimit } from '../lib/plans';
-import { getAccessToken } from '../lib/supabase';
+import { getAccessToken, getCurrentUserId, supabase } from '../lib/supabase';
 import { toSafeExternalUrl } from '../lib/urlSafety';
 import { 
   Globe, 
   Lock, 
-  Link as LinkIcon, 
   Check, 
   Copy, 
   Download, 
   FileText, 
-  Share2, 
   Search, 
   Plus, 
   X, 
@@ -31,16 +28,11 @@ import {
   Bookmark, 
   BookmarkCheck, 
   Send, 
-  CornerDownRight, 
   Loader2, 
-  Clock, 
   AlertCircle, 
-  ArrowLeft,
-  ChevronDown,
   Pencil
 } from 'lucide-react';
 import { DBService, generateCircleInviteCode } from '../services/db';
-import { getCurrentUserId, supabase } from '../lib/supabase';
 import { UserAvatar } from './UserAvatar';
 
 interface StudyGroupsProps {

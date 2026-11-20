@@ -10,7 +10,6 @@ import {
   Edit3,
   Eye,
   FileText,
-  Layers,
   LayoutTemplate,
   PanelLeft,
   Plus,

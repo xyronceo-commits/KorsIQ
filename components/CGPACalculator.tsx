@@ -1,10 +1,9 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { ICONS } from '../constants';
 import { 
-  Trash2, Edit2, Check, Target, Upload, FileText, Calendar, 
-  Clock, BookOpen, AlertCircle, CheckCircle2, ChevronRight, MessageSquare, 
-  Send, RefreshCw, Layers, Award, Bell, Download, ExternalLink, ShieldAlert,
-  RotateCcw, PenTool, BookMarked, HelpCircle, ArrowRight, X, AlertTriangle, Loader2
+  Trash2, Check, Target, Upload, FileText, Calendar, 
+  Clock, CheckCircle2, ChevronRight, MessageSquare, 
+  Send, RefreshCw, Layers, Bell, Download, ExternalLink,
+  RotateCcw, PenTool, BookMarked, HelpCircle, X, AlertTriangle, Loader2
 } from 'lucide-react';
 import { 
   UserProfile, Course, StudySession, AppNotification, AppState, 
