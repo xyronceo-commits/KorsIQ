@@ -590,3 +590,32 @@ describe('Defensive Export Fallbacks (missing / null / unknown template IDs)', (
     assert.ok((await generatePptxBlob(nullMetaDoc)).size > 2000);
   });
 });
+
+describe('Math & LaTeX Export Sanitization (.docx, .pdf & .pptx)', () => {
+  it('converts LaTeX engineering formulas to readable Unicode math with zero raw LaTeX leakage', async () => {
+    const mathDoc = buildSampleDoc(1, 1);
+    mathDoc.sections[0].title = 'Reinforced Concrete Design';
+    mathDoc.sections[0].content =
+      'Design compressive strength is $$f_{cd} = \\frac{f_{ck}}{\\gamma_c}$$ and neutral axis depth satisfies $\\frac{x}{d} \\le \\delta - 0.4$ at strut angle $21.8^\\circ$.';
+
+    const docxZip = await JSZip.loadAsync(await (await generateDocxBlob(mathDoc)).arrayBuffer());
+    const docxXml = await docxZip.file('word/document.xml')?.async('string');
+    assert.ok(docxXml);
+    assert.ok(docxXml.includes('f_cd = f_ck / γ_c'), 'Expected readable Unicode fraction in DOCX');
+    assert.ok(docxXml.includes('21.8°'), 'Expected degree symbol in DOCX');
+    assert.ok(!docxXml.includes('\\frac') && !docxXml.includes('\\gamma') && !docxXml.includes('$$'), 'No raw LaTeX in DOCX');
+
+    const pdfBlob = generatePdfBlob(mathDoc);
+    assert.equal(await readPdfHeader(pdfBlob), '%PDF-');
+    assert.ok(pdfBlob.size > 1500);
+
+    const pptxDoc = buildSampleDoc(1, 1, { docType: 'presentation', fileFormat: 'pptx' });
+    pptxDoc.sections[0].title = 'Shear Stress Check';
+    pptxDoc.sections[0].content = '- Design shear stress: $\\nu_{ed} = \\frac{V_{ed}}{b_w d}$\n- Strut angle $\\theta = 21.8^\\circ$';
+    const pptxZip = await JSZip.loadAsync(await (await generatePptxBlob(pptxDoc)).arrayBuffer());
+    const slide2Xml = await pptxZip.file('ppt/slides/slide2.xml')?.async('string');
+    assert.ok(slide2Xml);
+    assert.ok(slide2Xml.includes('ν_ed = V_ed / (b_w d)'), 'Expected readable Unicode math in PPTX');
+    assert.ok(!slide2Xml.includes('\\frac') && !slide2Xml.includes('\\nu') && !slide2Xml.includes('\\theta'), 'No raw LaTeX in PPTX');
+  });
+});

@@ -11,19 +11,22 @@ import { formatReferenceEntry } from '../lib/studioV2';
 import { resolveDocumentCoverPage, resolveSlideCoverPage } from '../lib/studioCover';
 import StudioVisualCard from './StudioVisualCard';
 import SlideVectorBackground from './SlideVectorBackground';
+import { renderKatexHtml } from './FormattedContent';
+import { latexToReadableMath, normalizeMathDelimiters } from '../lib/mathFormatter';
 
 export function getSectionAnchorId(sectionId: string): string {
   return `studio-preview-sec-${sectionId}`;
 }
 
 /**
- * Renders inline Markdown (**bold**, *italic*, `code`, [label](url)) cleanly
- * without ever exposing raw Markdown tokens in Preview mode.
+ * Renders inline Markdown (**bold**, *italic*, `code`, [label](url)) and LaTeX math
+ * ($...$, $$...$$, \(...\)) cleanly via KaTeX without exposing raw tokens in Preview mode.
  */
 function renderInlineMarkdown(text: string): React.ReactNode {
-  const input = (text || '').replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1');
+  const input = normalizeMathDelimiters(text || '').replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1');
   const tokens: React.ReactNode[] = [];
-  const pattern = /(\*\*([^*]+)\*\*|__([^_]+)__|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\)|\*([^*]+)\*|_([^_]+)_)/g;
+  const pattern =
+    /(\$\$([^$]+)\$\$|(?<!\\)\$(?!\s*\d[\d,.]*(?:\s|$))([^$\n]+?)\$|\*\*([^*]+)\*\*|__([^_]+)__|`([^`]+)`|\[([^\]]+)\]\(([^)]+)\)|\*([^*]+)\*|(?<![A-Za-z0-9])_([^_]+)_(?![A-Za-z0-9]))/g;
   let lastIdx = 0;
   let match: RegExpExecArray | null;
   let keyIdx = 0;
@@ -32,31 +35,46 @@ function renderInlineMarkdown(text: string): React.ReactNode {
     if (match.index > lastIdx) {
       tokens.push(input.slice(lastIdx, match.index));
     }
-    if (match[2] || match[3]) {
+    if (match[2]) {
+      tokens.push(
+        <span
+          key={`dm-${keyIdx++}`}
+          className="inline-block my-1 align-middle"
+          dangerouslySetInnerHTML={{ __html: renderKatexHtml(match[2], true) }}
+        />
+      );
+    } else if (match[3]) {
+      tokens.push(
+        <span
+          key={`im-${keyIdx++}`}
+          dangerouslySetInnerHTML={{ __html: renderKatexHtml(match[3], false) }}
+        />
+      );
+    } else if (match[4] || match[5]) {
       tokens.push(
         <strong key={`b-${keyIdx++}`} className="font-semibold">
-          {match[2] || match[3]}
+          {match[4] || match[5]}
         </strong>
       );
-    } else if (match[4]) {
+    } else if (match[6]) {
       tokens.push(
         <code
           key={`c-${keyIdx++}`}
           className="px-1 py-0.5 rounded bg-slate-100 text-[0.9em] font-mono"
         >
-          {match[4]}
+          {match[6]}
         </code>
       );
-    } else if (match[5]) {
+    } else if (match[7]) {
       tokens.push(
         <span key={`l-${keyIdx++}`} className="underline underline-offset-2">
-          {match[5]}
+          {match[7]}
         </span>
       );
-    } else if (match[7] || match[8]) {
+    } else if (match[9] || match[10]) {
       tokens.push(
         <em key={`i-${keyIdx++}`} className="italic">
-          {match[7] || match[8]}
+          {match[9] || match[10]}
         </em>
       );
     }
@@ -70,14 +88,14 @@ function renderInlineMarkdown(text: string): React.ReactNode {
 }
 
 function stripInlineMarkdownPlain(text: string): string {
-  return (text || '')
+  return latexToReadableMath(text || '')
     .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/__([^_]+)__/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/_([^_]+)_/g, '$1')
+    .replace(/(?<![A-Za-z0-9])_([^_]+)_(?![A-Za-z0-9])/g, '$1')
     .replace(/^#{1,6}\s+/gm, '')
     .trim();
 }
@@ -306,6 +324,45 @@ const RenderedMarkdownBlocks: React.FC<{
       continue;
     }
 
+    // Standalone display math block: $$...$$ or \[...\]
+    if (trimmed.startsWith('$$') || trimmed.startsWith('\\[')) {
+      const isBracket = trimmed.startsWith('\\[');
+      const closeToken = isBracket ? '\\]' : '$$';
+      const openLen = 2;
+      if (trimmed.length > openLen && trimmed.endsWith(closeToken)) {
+        const expr = trimmed.slice(openLen, -closeToken.length).trim();
+        nodes.push(
+          <div
+            key={`math-${blockKey++}`}
+            className="my-4 overflow-x-auto text-center"
+            dangerouslySetInnerHTML={{ __html: renderKatexHtml(expr, true) }}
+          />
+        );
+        i += 1;
+        continue;
+      }
+      const mathLines: string[] = [trimmed.slice(openLen)];
+      i += 1;
+      while (i < lines.length) {
+        const cur = lines[i].trim();
+        if (cur.endsWith(closeToken)) {
+          mathLines.push(cur.slice(0, -closeToken.length));
+          i += 1;
+          break;
+        }
+        mathLines.push(lines[i]);
+        i += 1;
+      }
+      nodes.push(
+        <div
+          key={`math-${blockKey++}`}
+          className="my-4 overflow-x-auto text-center"
+          dangerouslySetInnerHTML={{ __html: renderKatexHtml(mathLines.join('\n').trim(), true) }}
+        />
+      );
+      continue;
+    }
+
     // Standard paragraph (join consecutive plain lines until blank or block starter)
     const paraLines: string[] = [trimmed];
     i += 1;
@@ -316,6 +373,8 @@ const RenderedMarkdownBlocks: React.FC<{
         next.startsWith('#') ||
         next.startsWith('> ') ||
         next.startsWith('|') ||
+        next.startsWith('$$') ||
+        next.startsWith('\\[') ||
         /^[-*•]\s+/.test(next) ||
         /^\d+\.\s+/.test(next)
       ) {

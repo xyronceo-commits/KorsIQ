@@ -7,7 +7,7 @@ import { BILLING_ENABLED } from '../lib/plans';
 import { GeminiService } from '../services/gemini';
 import { DBService } from '../services/db';
 import { getCurrentUserId, getAccessToken } from '../lib/supabase';
-import ReactMarkdown from 'react-markdown';
+import { FormattedContent } from './FormattedContent';
 import { RecentFiles } from './RecentFiles';
 import { StudyHubAIChat } from './StudyHubAIChat';
 import { ResourceSearch } from './ResourceSearch';
@@ -1562,9 +1562,10 @@ const StudyHub: React.FC<StudyHubProps> = ({
                 </div>
                 {renderToolHistoryPanel('summary')}
                 {activeHub.summary && (
-                  <div className="prose max-w-none text-slate-700 text-lg sm:text-xl leading-[1.7] space-y-8 font-medium prose-slate prose-p:leading-relaxed prose-headings:font-serif">
-                    <ReactMarkdown>{activeHub.summary}</ReactMarkdown>
-                  </div>
+                  <FormattedContent
+                    content={activeHub.summary}
+                    className="prose max-w-none text-slate-700 text-lg sm:text-xl leading-[1.7] space-y-8 font-medium prose-slate prose-p:leading-relaxed prose-headings:font-serif"
+                  />
                 )}
               </div>
             )}
@@ -1697,9 +1698,10 @@ const StudyHub: React.FC<StudyHubProps> = ({
                         {/* Sub-tab Content: Structured Notes */}
                         {scannerSubTab === 'summary' && (
                           <div className="p-5 bg-slate-50 rounded-2xl border border-slate-150 space-y-3 max-h-96 overflow-y-auto">
-                            <div className="prose prose-slate max-w-none text-xs leading-relaxed">
-                              <ReactMarkdown>{scannedDocResult.summary || "No summary parsed."}</ReactMarkdown>
-                            </div>
+                            <FormattedContent
+                              content={scannedDocResult.summary || 'No summary parsed.'}
+                              className="prose prose-slate max-w-none text-xs leading-relaxed"
+                            />
                           </div>
                         )}
 
