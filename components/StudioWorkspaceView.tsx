@@ -213,7 +213,10 @@ export const StudioWorkspaceView: React.FC<StudioWorkspaceViewProps> = ({
   const totalWords = activeSections.reduce((sum, s) => sum + (s.wordCount || 0), 0) || doc.currentWordCount || 0;
   const hasDraftedContent = activeSections.some((s) => Boolean(s.content && s.content.trim().length > 0));
 
-  const currentSection = activeSections.find((s) => s.id === activeSectionId) || activeSections[0] || null;
+  const currentSection =
+    isCoverSelected || isReferencesSelected
+      ? null
+      : activeSections.find((s) => s.id === activeSectionId) || activeSections[0] || null;
   const currentSectionIndex = currentSection
     ? activeSections.findIndex((s) => s.id === currentSection.id)
     : 0;
@@ -742,7 +745,7 @@ export const StudioWorkspaceView: React.FC<StudioWorkspaceViewProps> = ({
                 doc={doc}
                 sections={activeSections}
                 template={slideTemplate}
-                activeSectionId={currentSection?.id || null}
+                activeSectionId={activeSectionId}
                 onSelectSectionId={onSelectSectionId}
                 onEditCurrentSlide={(secId) => {
                   onSelectSectionId(secId);

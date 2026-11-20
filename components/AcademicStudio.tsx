@@ -705,7 +705,11 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   // Sync active section & editor text across activeVariant (Document vs Slides)
   useEffect(() => {
     if (!activeDocument || activeSections.length === 0) return;
-    const stillExists = activeSectionId && activeSections.some((s) => s.id === activeSectionId);
+    const isSentinelTarget =
+      activeSectionId === '__cover_page__' || activeSectionId === '__references__';
+    const stillExists =
+      Boolean(activeSectionId) &&
+      (isSentinelTarget || activeSections.some((s) => s.id === activeSectionId));
     if (!stillExists) {
       setActiveSectionId(activeSections[0].id);
     }
