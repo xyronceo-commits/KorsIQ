@@ -84,8 +84,10 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
   const [streamingMessageId, setStreamingMessageId] = useState<string | null>(null);
   const [copiedMsgId, setCopiedMsgId] = useState<string | null>(null);
   const streamAbortRef = useRef<AbortController | null>(null);
+  const skipNextLoadConvIdRef = useRef<string | null>(null);
   const [inputVal, setInputVal] = useState('');
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+  const [failedPrompt, setFailedPrompt] = useState<{ text: string; baseMessages: AIMessage[] } | null>(null);
 
   // Mobile view toggle: 'chat' or 'list' (never side-by-side on mobile)
   const [mobilePanel, setMobilePanel] = useState<'chat' | 'list'>('chat');
@@ -182,6 +184,10 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
 
   useEffect(() => {
     if (activeConversationId) {
+      if (skipNextLoadConvIdRef.current === activeConversationId) {
+        skipNextLoadConvIdRef.current = null;
+        return;
+      }
       loadMessages(activeConversationId);
     } else {
       setMessages([]);
@@ -196,6 +202,7 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
     setActiveConversationId(null);
     setMessages([]);
     setErrorMsg(null);
+    setFailedPrompt(null);
     setMobilePanel('chat');
     setTimeout(() => inputRef.current?.focus(), 50);
   };
@@ -262,10 +269,49 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
   };
 
   const handleStopStreaming = () => {
+    const activeStreamId = streamingMessageId;
     streamAbortRef.current?.abort();
     streamAbortRef.current = null;
+    if (activeStreamId) {
+      setMessages((prev) => prev.filter((m) => !(m.id === activeStreamId && !m.content.trim())));
+    }
     setIsSending(false);
     setStreamingMessageId(null);
+  };
+
+  const formatChatError = (err: any): string => {
+    const status = Number(err?.status);
+    const code = String(err?.code || '').toUpperCase();
+    const rawMsg = String(err?.message || '').trim();
+    const lower = rawMsg.toLowerCase();
+
+    if (status === 401 || lower.includes('unauthorized') || lower.includes('expired access token')) {
+      return 'Your session has expired. Please refresh or sign in again to continue chatting.';
+    }
+    if (status === 402 || code === 'INSUFFICIENT_CREDITS') {
+      return rawMsg || 'You have run out of AI credits for this period.';
+    }
+    if (status === 429 || code === 'AI_RATE_LIMITED' || lower.includes('too many requests') || lower.includes('today\'s limit')) {
+      return rawMsg || 'Too many requests right now. Please wait a moment and try again.';
+    }
+    if (
+      status === 504 ||
+      code === 'AI_TIMEOUT' ||
+      lower.includes('timed out') ||
+      lower.includes('timeout') ||
+      lower.includes('failed to fetch') ||
+      lower.includes('networkerror') ||
+      lower.includes('load failed')
+    ) {
+      return 'The request timed out or lost connection. Please check your internet and try again.';
+    }
+    if (status === 503 || code === 'AI_CONFIG_ERROR') {
+      return 'KorsIQ AI is temporarily unavailable. Please try again in a moment.';
+    }
+    if (rawMsg && !rawMsg.startsWith('{') && !rawMsg.startsWith('<')) {
+      return rawMsg;
+    }
+    return 'Unable to reach KorsIQ AI right now. Please try again.';
   };
 
   const handleCopyMessage = async (msgId: string, content: string) => {
@@ -278,6 +324,7 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
 
   const runStreamingPrompt = async (promptText: string, baseMessages: AIMessage[]) => {
     setErrorMsg(null);
+    setFailedPrompt(null);
     setIsSending(true);
     setStreamStage('Understanding your request...');
 
@@ -343,54 +390,68 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
 
       if (controller.signal.aborted) return;
 
-      const aiText = finalDoneData?.text || accumulatedText || 'I could not generate a response. Please try again.';
+      const aiText = (finalDoneData?.text || accumulatedText || '').trim();
+      if (!aiText) {
+        const emptyErr: any = new Error('KorsIQ AI returned an empty response. Please try again.');
+        emptyErr.code = 'AI_EMPTY_RESPONSE';
+        throw emptyErr;
+      }
+
       let resolvedConv: AIConversation | null = finalDoneData?.conversation || null;
       let savedUser: AIMessage | null = finalDoneData?.userMessage || null;
       let savedAssistant: AIMessage | null = finalDoneData?.assistantMessage || null;
 
-      // Client-side RLS persistence fallback if server did not write
+      // Client-side RLS persistence fallback if server did not write (non-blocking)
       if (!resolvedConv && userId) {
-        const autoTitle = promptText.replace(/\s+/g, ' ').slice(0, 60) || 'New conversation';
-        if (activeConversationId) {
-          const { data: updated } = await supabase
-            .from('ai_conversations')
-            .update({ updated_at: new Date().toISOString() })
-            .eq('id', activeConversationId)
-            .eq('user_id', userId)
-            .select('id, user_id, course_id, title, created_at, updated_at')
-            .maybeSingle();
-          resolvedConv = (updated as AIConversation) || null;
-        } else {
-          const { data: created } = await supabase
-            .from('ai_conversations')
-            .insert({
-              user_id: userId,
-              course_id: scopeCourseId,
-              title: autoTitle
-            })
-            .select('id, user_id, course_id, title, created_at, updated_at')
-            .maybeSingle();
-          resolvedConv = (created as AIConversation) || null;
-        }
-
-        if (resolvedConv?.id) {
-          const { data: inserted } = await supabase
-            .from('ai_messages')
-            .insert([
-              { conversation_id: resolvedConv.id, user_id: userId, role: 'user', content: promptText },
-              { conversation_id: resolvedConv.id, user_id: userId, role: 'assistant', content: aiText }
-            ])
-            .select('id, conversation_id, role, content, created_at');
-          if (Array.isArray(inserted)) {
-            savedUser = (inserted.find((m: any) => m.role === 'user') as AIMessage) || null;
-            savedAssistant = (inserted.find((m: any) => m.role === 'assistant') as AIMessage) || null;
+        try {
+          const autoTitle = promptText.replace(/\s+/g, ' ').slice(0, 60) || 'New conversation';
+          if (activeConversationId) {
+            const { data: updated } = await supabase
+              .from('ai_conversations')
+              .update({ updated_at: new Date().toISOString() })
+              .eq('id', activeConversationId)
+              .eq('user_id', userId)
+              .select('id, user_id, course_id, title, created_at, updated_at')
+              .maybeSingle();
+            resolvedConv = (updated as AIConversation) || null;
+          } else {
+            const { data: created } = await supabase
+              .from('ai_conversations')
+              .insert({
+                user_id: userId,
+                course_id: scopeCourseId,
+                title: autoTitle
+              })
+              .select('id, user_id, course_id, title, created_at, updated_at')
+              .maybeSingle();
+            resolvedConv = (created as AIConversation) || null;
           }
+
+          if (resolvedConv?.id) {
+            const { data: inserted } = await supabase
+              .from('ai_messages')
+              .insert([
+                { conversation_id: resolvedConv.id, user_id: userId, role: 'user', content: promptText },
+                { conversation_id: resolvedConv.id, user_id: userId, role: 'assistant', content: aiText }
+              ])
+              .select('id, conversation_id, role, content, created_at');
+            if (Array.isArray(inserted)) {
+              savedUser = (inserted.find((m: any) => m.role === 'user') as AIMessage) || null;
+              savedAssistant = (inserted.find((m: any) => m.role === 'assistant') as AIMessage) || null;
+            }
+          }
+        } catch (persistErr) {
+          console.warn('Non-blocking client chat persistence warning:', persistErr);
         }
       }
 
       const finalConvId = resolvedConv?.id || activeConversationId || `local-${Date.now()}`;
       if (resolvedConv) {
-        setActiveConversationId(resolvedConv.id);
+        if (resolvedConv.id !== activeConversationId) {
+          // Prevent useEffect([activeConversationId]) from immediately wiping our live streamed messages
+          skipNextLoadConvIdRef.current = resolvedConv.id;
+          setActiveConversationId(resolvedConv.id);
+        }
         setConversations((prev) => {
           const others = prev.filter((c) => c.id !== resolvedConv!.id);
           return [resolvedConv!, ...others];
@@ -421,7 +482,8 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
     } catch (err: any) {
       if (controller.signal.aborted || err?.name === 'AbortError') return;
       setMessages((prev) => prev.filter((m) => m.id !== streamingAssistantId));
-      setErrorMsg(err?.message || 'Unable to reach KorsIQ AI right now.');
+      setFailedPrompt({ text: promptText, baseMessages });
+      setErrorMsg(formatChatError(err));
     } finally {
       if (streamAbortRef.current === controller) {
         streamAbortRef.current = null;
@@ -429,6 +491,12 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
       setIsSending(false);
       setStreamingMessageId(null);
     }
+  };
+
+  const handleRetryLastPrompt = async () => {
+    if (isSending || !failedPrompt) return;
+    const { text, baseMessages } = failedPrompt;
+    await runStreamingPrompt(text, baseMessages);
   };
 
   const handleSendMessage = async (e?: React.FormEvent) => {
@@ -776,9 +844,22 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
             )}
 
             {errorMsg && (
-              <p className="text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 rounded-lg px-3 py-2" role="alert">
-                {errorMsg}
-              </p>
+              <div
+                className="flex flex-wrap items-center justify-between gap-2 text-xs text-red-700 dark:text-red-300 bg-red-50 dark:bg-red-950/30 border border-red-200 dark:border-red-900/50 rounded-lg px-3.5 py-2.5"
+                role="alert"
+              >
+                <p className="flex-1 min-w-[200px]">{errorMsg}</p>
+                {failedPrompt && !isSending && (
+                  <button
+                    type="button"
+                    onClick={handleRetryLastPrompt}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold bg-white dark:bg-slate-900 text-red-700 dark:text-red-300 border border-red-300 dark:border-red-800 hover:bg-red-100/70 dark:hover:bg-red-950/60 rounded-md transition-colors cursor-pointer shrink-0"
+                  >
+                    <RotateCcw size={12} />
+                    <span>Retry</span>
+                  </button>
+                )}
+              </div>
             )}
 
             <div ref={messagesEndRef} />

@@ -81,15 +81,17 @@ export function buildStudentContext(
   const department = sanitizePromptField(profile?.department || profile?.major || '', 120);
   const level = sanitizePromptField(profile?.level || 'Undergraduate', 60) || 'Undergraduate';
   const university = sanitizePromptField(profile?.university || '', 140);
-  const enrolledCourses = Array.isArray(courses) ? courses.slice(0, 30) : [];
+  const enrolledCourses = Array.isArray(courses)
+    ? courses.filter((c): c is StudentCourseContext => Boolean(c && typeof c === 'object')).slice(0, 30)
+    : [];
 
   let courseListStr = 'No specific courses currently registered.';
   if (enrolledCourses.length > 0) {
     courseListStr = enrolledCourses
       .map(c => {
-        const code = sanitizePromptField(c.code, 30);
-        const title = sanitizePromptField(c.title, 120);
-        const units = typeof c.units === 'number' && Number.isFinite(c.units) ? c.units : undefined;
+        const code = sanitizePromptField(c?.code, 30) || 'COURSE';
+        const title = sanitizePromptField(c?.title, 120) || 'Untitled Course';
+        const units = typeof c?.units === 'number' && Number.isFinite(c.units) ? c.units : undefined;
         return `- ${code}: ${title}${units ? ` (${units} Units)` : ''}`;
       })
       .join('\n');

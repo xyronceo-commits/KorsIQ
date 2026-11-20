@@ -339,41 +339,88 @@ export const GeminiService = {
 
     if (!resp.ok || !resp.body) {
       const errText = await resp.text().catch(() => '');
-      throw new Error(errText || 'Failed to start streaming response.');
+      let parsed: any = null;
+      try {
+        parsed = errText ? JSON.parse(errText) : null;
+      } catch {}
+      const err: any = new Error(
+        parsed?.error || (errText && !errText.trim().startsWith('<') ? errText : '') || 'Failed to start streaming response.'
+      );
+      err.status = resp.status;
+      if (parsed?.code) err.code = parsed.code;
+      throw err;
     }
 
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let receivedDone = false;
+    let receivedTokens = false;
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-
-      const parts = buffer.split('\n\n');
-      buffer = parts.pop() || '';
-
-      for (const part of parts) {
-        const lines = part.split('\n');
-        let eventName = 'message';
-        let dataStr = '';
-        for (const line of lines) {
-          if (line.startsWith('event:')) eventName = line.slice(6).trim();
-          else if (line.startsWith('data:')) dataStr += line.slice(5).trim();
-        }
-        if (!dataStr) continue;
-        let parsed: any = {};
-        try {
-          parsed = JSON.parse(dataStr);
-        } catch {
-          continue;
-        }
-        if (eventName === 'stage') callbacks.onStage?.(parsed);
-        else if (eventName === 'token' && parsed.text) callbacks.onToken(parsed.text);
-        else if (eventName === 'done') callbacks.onDone?.(parsed);
-        else if (eventName === 'error') throw new Error(parsed.error || 'Streaming error');
+    const processEventBlock = (part: string) => {
+      const lines = part.split('\n');
+      let eventName = 'message';
+      const dataLines: string[] = [];
+      for (const rawLine of lines) {
+        const line = rawLine.trimEnd();
+        if (line.startsWith('event:')) eventName = line.slice(6).trim();
+        else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
       }
+      const dataStr = dataLines.join('\n');
+      if (!dataStr) return;
+      let parsed: any = {};
+      try {
+        parsed = JSON.parse(dataStr);
+      } catch {
+        return;
+      }
+      if (eventName === 'stage') {
+        callbacks.onStage?.(parsed);
+      } else if (eventName === 'token' && typeof parsed.text === 'string' && parsed.text.length > 0) {
+        receivedTokens = true;
+        callbacks.onToken(parsed.text);
+      } else if (eventName === 'done') {
+        receivedDone = true;
+        callbacks.onDone?.(parsed);
+      } else if (eventName === 'error') {
+        const err: any = new Error(parsed.error || 'Unable to generate a response right now.');
+        if (parsed.status) err.status = parsed.status;
+        if (parsed.code) err.code = parsed.code;
+        throw err;
+      }
+    };
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() || '';
+
+        for (const part of parts) {
+          if (part.trim()) processEventBlock(part);
+        }
+      }
+
+      buffer += decoder.decode().replace(/\r\n/g, '\n');
+      if (buffer.trim()) {
+        for (const part of buffer.split('\n\n')) {
+          if (part.trim()) processEventBlock(part);
+        }
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {}
+    }
+
+    if (!callbacks.signal?.aborted && !receivedDone && !receivedTokens) {
+      const incompleteErr: any = new Error('The AI connection closed before a response was received. Please try again.');
+      incompleteErr.code = 'STREAM_INCOMPLETE';
+      incompleteErr.status = 502;
+      throw incompleteErr;
     }
   },
 
@@ -393,38 +440,82 @@ export const GeminiService = {
       signal: callbacks.signal,
     });
     if (!resp.ok || !resp.body) {
-      throw new Error('Failed to start streaming response.');
+      const errText = await resp.text().catch(() => '');
+      let parsed: any = null;
+      try {
+        parsed = errText ? JSON.parse(errText) : null;
+      } catch {}
+      const err: any = new Error(parsed?.error || 'Failed to start streaming response.');
+      err.status = resp.status;
+      if (parsed?.code) err.code = parsed.code;
+      throw err;
     }
     const reader = resp.body.getReader();
     const decoder = new TextDecoder();
     let buffer = '';
+    let receivedDone = false;
+    let receivedTokens = false;
 
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split('\n\n');
-      buffer = parts.pop() || '';
-      for (const part of parts) {
-        const lines = part.split('\n');
-        let eventName = 'message';
-        let dataStr = '';
-        for (const line of lines) {
-          if (line.startsWith('event:')) eventName = line.slice(6).trim();
-          else if (line.startsWith('data:')) dataStr += line.slice(5).trim();
-        }
-        if (!dataStr) continue;
-        let parsed: any = {};
-        try {
-          parsed = JSON.parse(dataStr);
-        } catch {
-          continue;
-        }
-        if (eventName === 'stage') callbacks.onStage?.(parsed);
-        else if (eventName === 'token' && parsed.text) callbacks.onToken(parsed.text);
-        else if (eventName === 'done') callbacks.onDone?.();
-        else if (eventName === 'error') throw new Error(parsed.error || 'Streaming error');
+    const processEventBlock = (part: string) => {
+      const lines = part.split('\n');
+      let eventName = 'message';
+      const dataLines: string[] = [];
+      for (const rawLine of lines) {
+        const line = rawLine.trimEnd();
+        if (line.startsWith('event:')) eventName = line.slice(6).trim();
+        else if (line.startsWith('data:')) dataLines.push(line.slice(5).trim());
       }
+      const dataStr = dataLines.join('\n');
+      if (!dataStr) return;
+      let parsed: any = {};
+      try {
+        parsed = JSON.parse(dataStr);
+      } catch {
+        return;
+      }
+      if (eventName === 'stage') callbacks.onStage?.(parsed);
+      else if (eventName === 'token' && typeof parsed.text === 'string' && parsed.text.length > 0) {
+        receivedTokens = true;
+        callbacks.onToken(parsed.text);
+      } else if (eventName === 'done') {
+        receivedDone = true;
+        callbacks.onDone?.();
+      } else if (eventName === 'error') {
+        const err: any = new Error(parsed.error || 'Streaming error');
+        if (parsed.status) err.status = parsed.status;
+        if (parsed.code) err.code = parsed.code;
+        throw err;
+      }
+    };
+
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n');
+        const parts = buffer.split('\n\n');
+        buffer = parts.pop() || '';
+        for (const part of parts) {
+          if (part.trim()) processEventBlock(part);
+        }
+      }
+      buffer += decoder.decode().replace(/\r\n/g, '\n');
+      if (buffer.trim()) {
+        for (const part of buffer.split('\n\n')) {
+          if (part.trim()) processEventBlock(part);
+        }
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {}
+    }
+
+    if (!callbacks.signal?.aborted && !receivedDone && !receivedTokens) {
+      const incompleteErr: any = new Error('The AI connection closed before a response was received. Please try again.');
+      incompleteErr.code = 'STREAM_INCOMPLETE';
+      incompleteErr.status = 502;
+      throw incompleteErr;
     }
   },
 

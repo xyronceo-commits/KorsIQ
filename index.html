@@ -120,7 +120,8 @@
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <script src="https://cdn.tailwindcss.com"></script>
     <script>
-      tailwind.config = {
+      if (typeof tailwind !== 'undefined') {
+        tailwind.config = {
         darkMode: 'class',
         theme: {
           extend: {
@@ -155,6 +156,7 @@
             }
           }
         }
+      };
       }
     </script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
