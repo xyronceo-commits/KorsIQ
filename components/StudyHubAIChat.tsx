@@ -15,7 +15,7 @@ import {
   RotateCcw,
   Square
 } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import { FormattedContent } from './FormattedContent';
 import { Course, StudyHubData, UserProfile } from '../types';
 import { GeminiService, getHeaders } from '../services/gemini';
 import { supabase, getCurrentUserId } from '../lib/supabase';
@@ -791,9 +791,10 @@ export const StudyHubAIChat: React.FC<StudyHubAIChatProps> = ({
                             />
                           )}
                           {msg.content && (
-                            <div className="prose prose-xs sm:prose-sm dark:prose-invert max-w-none">
-                              <ReactMarkdown>{msg.content}</ReactMarkdown>
-                            </div>
+                            <FormattedContent
+                              content={msg.content}
+                              className="prose prose-xs sm:prose-sm dark:prose-invert max-w-none"
+                            />
                           )}
                           {!isCurrentlyStreaming && msg.content && (
                             <div className="flex items-center justify-between gap-2 pt-2 border-t border-[#E5E7EB] dark:border-slate-700/70">

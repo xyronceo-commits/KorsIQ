@@ -235,6 +235,17 @@ html, body {
   font-weight: 600;
 }
 
+/* KaTeX math rendering inside prose & preview containers */
+.korsiq-formatted-content .katex-display {
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding: 0.35rem 0;
+  margin: 0.75rem 0;
+}
+.korsiq-formatted-content .katex {
+  font-size: 1.02em;
+}
+
 /* Print Stylesheet for High-Fidelity PDF generation */
 @media print {
   body {

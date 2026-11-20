@@ -3,6 +3,7 @@ import { AcademicDocument } from '../types';
 import { renderVisualBlockToPng } from './visualRenderer';
 import { formatReferenceEntry, inferSectionKind, STUDIO_DOWNLOAD_NOTICE } from '../lib/studioV2';
 import { resolveDocumentCoverPage, resolveSlideCoverPage } from '../lib/studioCover';
+import { latexToReadableMath } from '../lib/mathFormatter';
 import {
   DocumentTemplate,
   SlideTemplate,
@@ -15,14 +16,14 @@ import {
 } from '../lib/studioTemplates';
 
 function stripInlineMarkdown(text: string): string {
-  return (text || '')
+  return latexToReadableMath(text || '')
     .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/__([^_]+)__/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/_([^_]+)_/g, '$1')
+    .replace(/(?<![A-Za-z0-9])_([^_]+)_(?![A-Za-z0-9])/g, '$1')
     .trim();
 }
 

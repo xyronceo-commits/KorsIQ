@@ -3,6 +3,7 @@ import { AcademicDocument } from '../types';
 import { renderVisualBlockToPng } from './visualRenderer';
 import { formatReferenceEntry, STUDIO_DOWNLOAD_NOTICE } from '../lib/studioV2';
 import { resolveSlideCoverPage } from '../lib/studioCover';
+import { latexToReadableMath } from '../lib/mathFormatter';
 import {
   SlideTemplate,
   getSlideTemplateForDoc,
@@ -11,14 +12,14 @@ import {
 } from '../lib/studioTemplates';
 
 function cleanText(raw: string): string {
-  return (raw || '')
+  return latexToReadableMath(raw || '')
     .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
     .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/__([^_]+)__/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
-    .replace(/_([^_]+)_/g, '$1')
+    .replace(/(?<![A-Za-z0-9])_([^_]+)_(?![A-Za-z0-9])/g, '$1')
     .replace(/^#{1,6}\s+/gm, '')
     .trim();
 }

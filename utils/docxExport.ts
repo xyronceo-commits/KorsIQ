@@ -3,12 +3,24 @@ import { AcademicDocument } from '../types';
 import { renderVisualBlockToPng } from './visualRenderer';
 import { formatReferenceEntry, inferSectionKind, STUDIO_DOWNLOAD_NOTICE } from '../lib/studioV2';
 import { resolveDocumentCoverPage } from '../lib/studioCover';
+import { latexToReadableMath } from '../lib/mathFormatter';
 import {
   DocumentTemplate,
   documentTemplateToVisualPalette,
   getDocumentTemplateForDoc,
   stripHexHash,
 } from '../lib/studioTemplates';
+
+function formatDocxText(raw: string): string {
+  return latexToReadableMath(raw || '')
+    .replace(/!\[([^\]]*)\]\([^)]+\)/g, '$1')
+    .replace(/\[([^\]]+)\]\([^)]+\)/g, '$1')
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .trim();
+}
 
 function escapeXml(unsafe: string): string {
   return (unsafe || '')
@@ -705,20 +717,22 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
 
         // Markdown subheadings
         if (trimmed.startsWith('### ')) {
-          bodyXml += buildHeadingXml(trimmed.replace(/^###\s+/, ''), 3, tpl);
+          bodyXml += buildHeadingXml(formatDocxText(trimmed.replace(/^###\s+/, '')), 3, tpl);
           return;
         }
         if (trimmed.startsWith('## ')) {
-          bodyXml += buildHeadingXml(trimmed.replace(/^##\s+/, ''), 2, tpl);
+          bodyXml += buildHeadingXml(formatDocxText(trimmed.replace(/^##\s+/, '')), 2, tpl);
           return;
         }
 
         // Blockquote / Callout
         if (trimmed.startsWith('> ')) {
-          const cleanQuote = trimmed
-            .split('\n')
-            .map((l) => l.replace(/^>\s?/, ''))
-            .join(' ');
+          const cleanQuote = formatDocxText(
+            trimmed
+              .split('\n')
+              .map((l) => l.replace(/^>\s?/, ''))
+              .join(' ')
+          );
           bodyXml += buildCalloutXml(cleanQuote, tpl);
           return;
         }
@@ -732,7 +746,7 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
               rowStr
                 .split('|')
                 .filter((_, cIdx, arr) => cIdx > 0 && cIdx < arr.length - 1)
-                .map((c) => c.trim());
+                .map((c) => formatDocxText(c.trim()));
             const headers = parseRow(dataLines[0]);
             const rows = dataLines.slice(1).map(parseRow);
             if (headers.length > 0) {
@@ -746,7 +760,7 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
         if (trimmed.startsWith('- ') || trimmed.startsWith('* ')) {
           const items = trimmed.split('\n');
           items.forEach((item) => {
-            const cleanItem = item.replace(/^[-*]\s+/, '').trim();
+            const cleanItem = formatDocxText(item.replace(/^[-*]\s+/, '').trim());
             if (!cleanItem) return;
             bodyXml += `
               <w:p>
@@ -763,7 +777,7 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
         bodyXml += `
           <w:p>
             <w:pPr>${firstLineIndent}<w:spacing w:after="160" w:line="${lineSpacingVal}" w:lineRule="auto"/></w:pPr>
-            <w:r><w:rPr><w:color w:val="${textHex}"/><w:sz w:val="${bodySz}"/></w:rPr><w:t xml:space="preserve">${escapeXml(trimmed)}</w:t></w:r>
+            <w:r><w:rPr><w:color w:val="${textHex}"/><w:sz w:val="${bodySz}"/></w:rPr><w:t xml:space="preserve">${escapeXml(formatDocxText(trimmed))}</w:t></w:r>
           </w:p>
         `;
       });
