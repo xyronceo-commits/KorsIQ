@@ -3,45 +3,19 @@ import { motion, AnimatePresence } from 'motion/react';
 import {
   FileText,
   Plus,
-  BookOpen as Sparkles,
-  BookOpen,
   ArrowRight,
   ArrowLeft,
   CheckCircle2,
   AlertCircle,
   Download,
-  Printer,
   Copy,
   Trash2,
-  Edit3,
-  History,
   Search,
-  ExternalLink,
-  ChevronRight,
-  ChevronDown,
-  Layers,
   Edit3 as Wand2,
-  RefreshCw,
-  Sliders,
   Check,
   X,
   ShieldAlert,
-  GraduationCap,
-  Quote,
-  Eye,
-  FileCheck,
-  FileUp,
-  RotateCcw,
-  Maximize2,
-  HelpCircle,
-  Compass,
-  Zap,
-  Bookmark,
   Crown,
-  ListOrdered,
-  LayoutTemplate,
-  PanelLeft,
-  Presentation
 } from 'lucide-react';
 import {
   AcademicDocument,
@@ -52,7 +26,6 @@ import {
   SlideTemplateId,
   StudioBrief,
   StudioCoverPageData,
-  StudioDocumentStatus,
   StudioFileFormat,
   StudioJob,
   StudioOutlineItem,
@@ -74,7 +47,7 @@ import { generateDocxBlob, downloadDocx } from '../utils/docxExport';
 import { downloadPdf } from '../utils/pdfExport';
 import { downloadPptx } from '../utils/pptxExport';
 import { DEFAULT_VISUAL_PREFERENCES, hasAnyVisualElementEnabled } from '../utils/visualRenderer';
-import { BILLING_ENABLED, can, getPlanDisplayName } from '../lib/plans';
+import { BILLING_ENABLED, can } from '../lib/plans';
 import {
   canMountStudioEditor,
   computeDocumentCardProgress,
@@ -83,36 +56,22 @@ import {
   resolveTargetPagesForDoc,
   selectStudioHomeStatusBar,
   sortAcademicSections,
-  STUDIO_DOWNLOAD_NOTICE,
-  wordsToEstimatedPages,
 } from '../lib/studioV2';
 import {
   documentTemplateToLegacyStyle,
-  documentTemplateToVisualPalette,
   getDocumentTemplateForDoc,
   getSlideTemplateForDoc,
   isSlideDocument,
   resolveDocumentTemplate,
   resolveSlideTemplate,
-  slideTemplateToVisualPalette,
 } from '../lib/studioTemplates';
-import KorsIQLogo from './KorsIQLogo';
 import SubscriptionCheckoutModal from './SubscriptionCheckoutModal';
 import StudioVisualDesignPanel from './StudioVisualDesignPanel';
 import StudioVisualCard from './StudioVisualCard';
 import StudioBriefForm from './StudioBriefForm';
 import StudioOutlineReview from './StudioOutlineReview';
 import StudioJobProgress from './StudioJobProgress';
-import { StudioTemplateModal } from './StudioTemplatePicker';
-import {
-  StudioDocumentPreview,
-  StudioSlideDeckPreview,
-  getSectionAnchorId,
-} from './StudioPreviewCanvas';
-import {
-  StudioInspectorDrawer,
-  StudioInspectorTab,
-} from './StudioInspectorDrawer';
+import { StudioInspectorTab } from './StudioInspectorDrawer';
 import { StudioWorkspaceView } from './StudioWorkspaceView';
 import { AILiveStatus } from './AILiveStatus';
 
@@ -192,9 +151,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   }, [documents, activeDocId]);
 
   const [activeSectionId, setActiveSectionId] = useState<string | null>(null);
-  const [activeRightTab, setActiveRightTab] = useState<'assistant' | 'references' | 'review' | 'versions'>('assistant');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
-  const [isRightPanelOpen, setIsRightPanelOpen] = useState(true);
+  const [, setActiveRightTab] = useState<'assistant' | 'references' | 'review' | 'versions'>('assistant');
 
   // Creation Wizard State
   const [isCreatingDoc, setIsCreatingDoc] = useState(false);
@@ -210,7 +167,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   const [showVisualPrefsModal, setShowVisualPrefsModal] = useState(false);
   const [newDocInstructions, setNewDocInstructions] = useState('');
   const [newDocDepartment, setNewDocDepartment] = useState(profile.department || '');
-  const [newDocInstitution, setNewDocInstitution] = useState(profile.university || '');
+  const [newDocInstitution] = useState(profile.university || '');
   const [newDocLecturer, setNewDocLecturer] = useState('');
   const [newDocReferences, setNewDocReferences] = useState<StudioReference[]>([]);
   const [isPlanningLoading, setIsPlanningLoading] = useState(false);
@@ -219,7 +176,6 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   const [editorText, setEditorText] = useState('');
   const [isSectionGenerating, setIsSectionGenerating] = useState(false);
   const [batchProgress, setBatchProgress] = useState<{ current: number; total: number; title: string } | null>(null);
-  const [contextualAssistPrompt, setContextualAssistPrompt] = useState('');
   const [isAssistLoading, setIsAssistLoading] = useState(false);
   const [selectedTextSnippet, setSelectedTextSnippet] = useState('');
   const [editorSelectionRange, setEditorSelectionRange] = useState<{ start: number; end: number } | null>(null);
@@ -685,8 +641,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     resetDate?: string;
   } | null>(null);
 
-  // Mobile Bottom Sheets & Quiet Upgrade State
-  const [mobileSheet, setMobileSheet] = useState<'outline' | 'sources' | 'cite' | 'versions' | null>(null);
+  // Quiet Upgrade & Editor History State
   const [showQuietUpgrade, setShowQuietUpgrade] = useState<{ feature: string; description: string } | null>(null);
   const [editorHistory, setEditorHistory] = useState<string[]>([]);
   const [historyIndex, setHistoryIndex] = useState<number>(-1);
@@ -1216,14 +1171,6 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   };
 
   // Outline Editing Handlers
-  const handleToggleApproveOutlineItem = (itemId: string) => {
-    if (!activeDocument) return;
-    const updated = activeDocument.outline.map((o) =>
-      o.id === itemId ? { ...o, approved: !o.approved } : o
-    );
-    persistDocument({ ...activeDocument, outline: updated });
-  };
-
   const handleUpdateOutlineItemTitle = (itemId: string, newTitle: string) => {
     if (!activeDocument) return;
     const updatedOutline = activeDocument.outline.map((o) =>
@@ -1549,37 +1496,6 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     }
   };
 
-  const handleApplyReviewSuggestion = (suggestion: StudioReviewSuggestion) => {
-    if (!activeDocument || !suggestion.originalText || !suggestion.suggestedReplacement) return;
-    if (!editorText.includes(suggestion.originalText)) {
-      showToast('Could not find the target phrase in this active section. Please select the relevant section.');
-      return;
-    }
-
-    const updatedText = editorText.replace(suggestion.originalText, suggestion.suggestedReplacement);
-    handleEditorChange(updatedText);
-
-    if (reviewResult) {
-      setReviewResult({
-        ...reviewResult,
-        suggestions: reviewResult.suggestions.map((s) =>
-          s.id === suggestion.id ? { ...s, status: 'accepted' } : s
-        ),
-      });
-    }
-    showToast('Suggestion applied to manuscript.');
-  };
-
-  const handleDismissReviewSuggestion = (suggestionId: string) => {
-    if (!reviewResult) return;
-    setReviewResult({
-      ...reviewResult,
-      suggestions: reviewResult.suggestions.map((s) =>
-        s.id === suggestionId ? { ...s, status: 'rejected' } : s
-      ),
-    });
-  };
-
   // =========================================================
   // REFERENCE CITATION INSERTION
   // =========================================================
@@ -1775,11 +1691,6 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
       return matchesSearch && matchesType;
     });
   }, [documents, searchQuery, typeFilter]);
-
-  // Total words written across all documents
-  const overallWordCount = useMemo(() => {
-    return documents.reduce((sum, d) => sum + (d.currentWordCount || 0), 0);
-  }, [documents]);
 
   return (
     <div

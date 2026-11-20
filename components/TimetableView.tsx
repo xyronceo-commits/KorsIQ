@@ -1,6 +1,6 @@
 import React from 'react';
 import { Course, StudySession } from '../types';
-import { Calendar, Download, Clock } from 'lucide-react';
+import { Download, Clock } from 'lucide-react';
 
 interface TimetableViewProps {
   schedule: StudySession[];

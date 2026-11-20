@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import { Course, Difficulty, UserProfile } from '../types';
-import { DIFFICULTY_COLORS } from '../constants';
 import { GeminiService } from '../services/gemini';
 import { RecentFiles } from './RecentFiles';
 import { getCurrentUserId } from '../lib/supabase';
@@ -11,12 +10,10 @@ import {
   Sparkles, 
   Calendar, 
   Trash2, 
-  Link as LinkIcon, 
   Globe, 
   X, 
   Loader2, 
   AlertCircle,
-  BookOpen,
   Archive,
   ArchiveRestore
 } from 'lucide-react';

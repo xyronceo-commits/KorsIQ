@@ -1,6 +1,5 @@
 import React, { useEffect, useState, useRef, useCallback } from 'react';
-import { motion } from 'motion/react';
-import { Mail, ArrowRight, RefreshCw, ArrowLeft, Check, AlertCircle, X } from 'lucide-react';
+import { ArrowRight, RefreshCw, ArrowLeft, Check, AlertCircle, X } from 'lucide-react';
 import { supabase } from '../lib/supabase';
 import KorsIQLogo from './KorsIQLogo';
 

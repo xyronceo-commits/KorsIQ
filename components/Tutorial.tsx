@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { ChevronRight, X, ArrowRight, BookOpen, Calendar, MessageSquare, GraduationCap } from 'lucide-react';
+import { X, ArrowRight, BookOpen, Calendar, MessageSquare, GraduationCap } from 'lucide-react';
 
 interface TutorialProps {
   onComplete: () => void;

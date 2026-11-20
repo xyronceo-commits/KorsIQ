@@ -3,7 +3,6 @@ import cors from 'cors';
 import path from 'path';
 import crypto from 'crypto';
 import { createClient, SupabaseClient } from '@supabase/supabase-js';
-import { isAiSender } from './lib/brand';
 import {
   buildGenerateConfigForAttempt,
   buildModelChain,
@@ -18,7 +17,7 @@ import {
   resolveHeavyTimeoutMs,
 } from './lib/aiModels';
 import { GoogleGenAI } from '@google/genai';
-import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command } from '@aws-sdk/client-s3';
+import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';
 import { 
   processDocumentBuffer, 
@@ -26,7 +25,6 @@ import {
   validateExtractedText, 
   selectRelevantChunks 
 } from './lib/documentProcessor';
-import { NIGERIAN_UNIVERSITIES } from './utils/nigerianUniversities';
 import { buildStudentContext } from './lib/studentContext';
 import {
   AI_CREDIT_ALLOWANCES,
@@ -1196,22 +1194,12 @@ export async function createExpressApp() {
   };
 
   // The /api/s3/* routes need Supabase S3 keys. Without them, say so clearly instead of throwing a 500.
-  const requireS3Configured = (req: express.Request, res: express.Response, next: express.NextFunction) => {
+  const requireS3Configured = (_req: express.Request, res: express.Response, next: express.NextFunction) => {
     if (!process.env.SUPABASE_S3_ACCESS_KEY_ID || !process.env.SUPABASE_S3_SECRET_ACCESS_KEY) {
       return res.status(503).json({ success: false, error: 'File storage service is not configured on the server.' });
     }
     next();
   };
-  function inferBucketFromKey(key: string, explicitBucket?: string): string {
-    if (explicitBucket && typeof explicitBucket === 'string' && explicitBucket.trim()) {
-      return explicitBucket.trim();
-    }
-    const clean = String(key || '').trim();
-    if (clean.startsWith('users/')) return 'user-files';
-    if (clean.startsWith('groups/')) return 'group-materials';
-    if (clean.startsWith('library/')) return 'scolaris-library';
-    return cleanEnvKey('SUPABASE_S3_BUCKET_NAME') || 'user-files';
-  }
 
   async function downloadBufferViaS3(bucketName: string, key: string): Promise<Buffer | null> {
     if (!isS3Configured()) return null;
@@ -1230,7 +1218,7 @@ export async function createExpressApp() {
   }
 
   // API Routes
-  app.get('/api/health', (req, res) => {
+  app.get('/api/health', (_req, res) => {
     const paystackKey = getPaystackSecretKey();
     res.json({
       status: 'healthy',
@@ -1246,14 +1234,14 @@ export async function createExpressApp() {
   });
 
   // SEO Static Deliverables
-  app.get('/robots.txt', (req, res) => {
+  app.get('/robots.txt', (_req, res) => {
     res.setHeader('Content-Type', 'text/plain; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=43200');
     res.setHeader('X-Content-Type-Options', 'nosniff');
     res.sendFile(path.join(process.cwd(), 'public', 'robots.txt'));
   });
 
-  app.get('/sitemap.xml', (req, res) => {
+  app.get('/sitemap.xml', (_req, res) => {
     res.setHeader('Content-Type', 'application/xml; charset=utf-8');
     res.setHeader('Cache-Control', 'public, max-age=86400, stale-while-revalidate=43200');
     res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -1261,7 +1249,7 @@ export async function createExpressApp() {
   });
 
   // Get S3 configuration details
-  app.get('/api/s3/config', requireAuth, (req, res) => {
+  app.get('/api/s3/config', requireAuth, (_req, res) => {
     res.json({
       configured: isS3Configured(),
       endpoint: getSupabaseS3Endpoint(),
@@ -2502,10 +2490,6 @@ export async function createExpressApp() {
   });
 
   // Offline / Quota Fallback Generators
-  const getChatFallback = (groupName: string) => ({ 
-    text: `[KorsIQ Bot - Study Companion] Let's work on this together! Active recall and interactive flashcards are excellent tools for mastering "${groupName}". Let me know what concepts we should break down first!`
-  });
-
   const getImportFallback = (text: string) => {
     const imported: any[] = [];
     const lines = (text || '').split('\n');
@@ -2742,391 +2726,6 @@ export async function createExpressApp() {
     return { timetable, revisionPlans };
   };
 
-  const getStudioPlanFallback = (
-    title: string,
-    docType: string,
-    subject: string,
-    wordGoal: number,
-    citationStyle: string
-  ) => {
-    let outline: any[] = [];
-    const type = (docType || 'assignment').toLowerCase();
-
-    if (type === 'thesis') {
-      const chWords = Math.round(wordGoal / 5);
-      outline = [
-        {
-          id: 'sec-1',
-          title: 'Introduction & Background of the Study',
-          level: 1,
-          order: 1,
-          description: 'Background context, statement of the problem, research objectives, research questions, and significance.',
-          rationale: 'Establishes the intellectual justification and scope of the dissertation.',
-          targetWords: chWords,
-          approved: false,
-          subsections: [
-            { id: 'sec-1-1', title: 'Background to the Study', level: 2, order: 1, description: 'Historical and contemporary overview', targetWords: Math.round(chWords * 0.3), approved: false },
-            { id: 'sec-1-2', title: 'Statement of the Problem', level: 2, order: 2, description: 'Specific empirical or theoretical gap', targetWords: Math.round(chWords * 0.35), approved: false },
-            { id: 'sec-1-3', title: 'Objectives and Significance', level: 2, order: 3, description: 'Aim, research questions, and academic contributions', targetWords: Math.round(chWords * 0.35), approved: false }
-          ]
-        },
-        {
-          id: 'sec-2',
-          title: 'Literature Review & Theoretical Framework',
-          level: 1,
-          order: 2,
-          description: 'Conceptual framework, review of foundational theories, and critical synthesis of empirical literature.',
-          rationale: 'Demonstrates deep subject mastery and maps where this study builds upon prior scholarship.',
-          targetWords: Math.round(chWords * 1.2),
-          approved: false,
-          subsections: [
-            { id: 'sec-2-1', title: 'Theoretical Foundation', level: 2, order: 1, description: 'Grounding theories and analytical paradigms', targetWords: Math.round(chWords * 0.5), approved: false },
-            { id: 'sec-2-2', title: 'Empirical Studies Review', level: 2, order: 2, description: 'Critique of recent relevant published research', targetWords: Math.round(chWords * 0.7), approved: false }
-          ]
-        },
-        {
-          id: 'sec-3',
-          title: 'Research Methodology',
-          level: 1,
-          order: 3,
-          description: 'Research design, population, sampling method, instrumentation, validity/reliability, and analytical procedures.',
-          rationale: 'Ensures the research is reproducible, methodologically sound, and academically rigorous.',
-          targetWords: Math.round(chWords * 0.8),
-          approved: false
-        },
-        {
-          id: 'sec-4',
-          title: 'Data Presentation, Analysis & Discussion',
-          level: 1,
-          order: 4,
-          description: 'Presentation of experimental or empirical findings, hypothesis testing, and in-depth discussion.',
-          rationale: 'Presents the core findings and critically contrasts them against literature expectations.',
-          targetWords: Math.round(chWords * 1.2),
-          approved: false
-        },
-        {
-          id: 'sec-5',
-          title: 'Summary, Conclusions & Recommendations',
-          level: 1,
-          order: 5,
-          description: 'Summary of findings, principal conclusions, practical recommendations, and future research directions.',
-          rationale: 'Synthesizes practical takeaways and outlines the definitive contributions of the study.',
-          targetWords: Math.round(chWords * 0.8),
-          approved: false
-        }
-      ];
-    } else if (type === 'research_proposal') {
-      const pWords = Math.round(wordGoal / 4);
-      outline = [
-        {
-          id: 'sec-1',
-          title: 'Introduction & Research Problem',
-          level: 1,
-          order: 1,
-          description: 'Context, research gap, objectives, and research questions.',
-          rationale: 'Hooks the reader and proves why the proposed investigation is urgent and necessary.',
-          targetWords: pWords,
-          approved: false
-        },
-        {
-          id: 'sec-2',
-          title: 'Literature Review & Theoretical Context',
-          level: 1,
-          order: 2,
-          description: 'Evaluation of established scholarship and theoretical lenses.',
-          rationale: 'Frames the proposal within the broader discipline.',
-          targetWords: Math.round(pWords * 1.2),
-          approved: false
-        },
-        {
-          id: 'sec-3',
-          title: 'Proposed Methodology & Analytical Strategy',
-          level: 1,
-          order: 3,
-          description: 'Proposed sample, data collection instruments, ethical protocols, and analysis methods.',
-          rationale: 'Proves the feasibility and scientific validity of the project.',
-          targetWords: pWords,
-          approved: false
-        },
-        {
-          id: 'sec-4',
-          title: 'Expected Contributions, Budget & Timeline',
-          level: 1,
-          order: 4,
-          description: 'Anticipated intellectual contributions, milestone calendar, and resource requirements.',
-          rationale: 'Shows practical project management readiness.',
-          targetWords: Math.round(pWords * 0.8),
-          approved: false
-        }
-      ];
-    } else if (type === 'term_paper') {
-      const tWords = Math.round(wordGoal / 4);
-      outline = [
-        {
-          id: 'sec-1',
-          title: 'Introduction & Problem Formulation',
-          level: 1,
-          order: 1,
-          description: 'Background, thesis statement, and scope of inquiry.',
-          rationale: 'Defines the focus of the term paper.',
-          targetWords: Math.round(tWords * 0.8),
-          approved: false
-        },
-        {
-          id: 'sec-2',
-          title: 'Theoretical Concepts & Literature Synthesis',
-          level: 1,
-          order: 2,
-          description: 'Review of dominant conceptual models and prior findings.',
-          rationale: 'Provides the academic scaffolding for the analysis.',
-          targetWords: Math.round(tWords * 1.2),
-          approved: false
-        },
-        {
-          id: 'sec-3',
-          title: 'Critical Discussion & Evaluation',
-          level: 1,
-          order: 3,
-          description: 'Evidence-based analysis, comparing perspectives, and evaluation of evidence.',
-          rationale: 'Constitutes the intellectual core of the term paper.',
-          targetWords: Math.round(tWords * 1.2),
-          approved: false
-        },
-        {
-          id: 'sec-4',
-          title: 'Conclusion & Academic Implications',
-          level: 1,
-          order: 4,
-          description: 'Synthesis of key insights, limitations, and future outlook.',
-          rationale: 'Delivers a coherent, persuasive closing argument.',
-          targetWords: Math.round(tWords * 0.8),
-          approved: false
-        }
-      ];
-    } else {
-      // Standard Assignment, Essay, Case Study, Lab Report
-      const aWords = Math.round(wordGoal / 3);
-      outline = [
-        {
-          id: 'sec-1',
-          title: 'Introduction & Background Context',
-          level: 1,
-          order: 1,
-          description: 'Introduction of topic, defining key terminology, and central thesis statement.',
-          rationale: 'Clearly sets out the direction and parameters of the assignment.',
-          targetWords: Math.round(aWords * 0.8),
-          approved: false
-        },
-        {
-          id: 'sec-2',
-          title: 'Core Analysis & Critical Discussion',
-          level: 1,
-          order: 2,
-          description: 'Detailed analysis addressing the assignment prompts, synthesis of academic sources, and supporting arguments.',
-          rationale: 'Directly addresses the grading rubric criteria with thorough evidence.',
-          targetWords: Math.round(aWords * 1.4),
-          approved: false
-        },
-        {
-          id: 'sec-3',
-          title: 'Synthesis, Implications & Conclusion',
-          level: 1,
-          order: 3,
-          description: 'Summary of principal findings, practical implications, and closing perspective.',
-          rationale: 'Brings all arguments together into a cohesive, scholarly resolution.',
-          targetWords: Math.round(aWords * 0.8),
-          approved: false
-        }
-      ];
-    }
-
-    return {
-      abstractPlan: `Strategic plan formulated for "${title}" (${docType.replace('_', ' ')}). Structure is calibrated to deliver high scholarly depth, clear rhetorical flow, and direct alignment with course requirements using ${citationStyle} citations.`,
-      totalEstimatedWords: wordGoal,
-      outline
-    };
-  };
-
-  const getSectionGenerationFallback = (
-    sectionTitle: string,
-    sectionDescription: string,
-    targetWords: number,
-    citationStyle: string
-  ) => {
-    const isApa = citationStyle !== 'IEEE';
-    const c1 = isApa ? '(Anderson & O\'Connor, 2022)' : '[1]';
-    const c2 = isApa ? '(Bellingham et al., 2023)' : '[2]';
-    const c3 = isApa ? '(Harrison, 2021)' : '[3]';
-
-    const content = `### Overview
-The investigation into ${sectionTitle.toLowerCase()} requires an integrated examination of theoretical paradigms and empirical manifestations. As highlighted in foundational scholarship ${c1}, addressing these complexities requires moving beyond simplistic binary interpretations toward multidimensional models that capture nuance and operational variability.
-
-### Conceptual Foundations and Critical Analysis
-Within this framework, primary analytical vectors demonstrate that institutional mechanisms play a pivotal role in shaping observable outcomes ${c2}. The interaction between systemic constraints and strategic initiatives generates distinct behavioral patterns that must be evaluated rigorously. Specifically, contemporary empirical inquiries suggest three salient dimensions:
-
-1. **Structural Scaffolding:** Foundational parameters govern the transmission of inputs through verified channels, moderating volatility and reinforcing consistency across implementations ${c1}.
-2. **Contextual Adaptation:** Dynamic institutional variables necessitate iterative adjustments to maintain methodological fidelity, particularly when evaluating cross-sectional variances ${c3}.
-3. **Outcome Optimization:** Comprehensive synthesis of performance metrics ensures that theoretical propositions translate reliably into demonstrable academic and practical outcomes.
-
-### Synthesis and Strategic Implications
-Synthesizing these insights underscores the necessity of continuous recalibration. Rather than viewing ${sectionTitle.toLowerCase()} as an isolated occurrence, scholarly consensus increasingly frames it as an interconnected node within a broader academic architecture ${c2}. Consequently, the arguments advanced herein provide a robust evidentiary baseline for subsequent analytical phases.`;
-
-    const wordCount = content.trim().split(/\s+/).filter(Boolean).length;
-    return { content, wordCount };
-  };
-
-  const getStudioReviewFallback = (docTitle: string, citationStyle: string) => {
-    return {
-      academicQualityScore: 91,
-      summary: `The draft for "${docTitle}" demonstrates commendable scholarly clarity, coherent argumentation, and structured narrative progression. Several opportunities exist to elevate vocabulary, harmonize ${citationStyle} citations, and eliminate passive voice constructions.`,
-      strengths: [
-        'Well-defined structural progression with logical section transitions.',
-        'Clear academic prose free of informal conversational colloquialisms.',
-        'Effective alignment between stated objectives and concluding insights.'
-      ],
-      weaknesses: [
-        'A few assertions in early sections would benefit from more explicit empirical attribution.',
-        'Minor formatting variance across subheadings.'
-      ],
-      suggestions: [
-        {
-          id: 'sug-1',
-          type: 'citation',
-          title: 'Strengthen Attribution in Background',
-          explanation: 'Adding direct citations to recent peer-reviewed sources here will substantiate the problem statement.',
-          originalText: 'Addressing these complexities requires moving beyond simplistic interpretations',
-          suggestedReplacement: 'As demonstrated in recent meta-analyses (Smith & Vance, 2023), addressing these complexities requires moving beyond simplistic interpretations',
-          severity: 'improvement'
-        },
-        {
-          id: 'sug-2',
-          type: 'tone',
-          title: 'Enhance Academic Vocabulary',
-          explanation: 'Using stronger scholarly verbs reinforces authoritative tone.',
-          originalText: 'play a pivotal role in shaping observable outcomes',
-          suggestedReplacement: 'substantially dictate empirical trajectories and observable outcomes',
-          severity: 'minor'
-        },
-        {
-          id: 'sug-3',
-          type: 'structure',
-          title: 'Transition Sentence to Next Chapter',
-          explanation: 'Ensure the closing sentence explicitly bridges into the methodology or subsequent analysis.',
-          originalText: 'provide a robust evidentiary baseline for subsequent analytical phases.',
-          suggestedReplacement: 'provide a robust evidentiary baseline that directly informs the methodological framework detailed in the following section.',
-          severity: 'improvement'
-        }
-      ]
-    };
-  };
-
-  const getMaterialsFallback = (content: string, type: 'summary' | 'flashcards' | 'quiz' | 'test') => {
-    if (type === 'summary') {
-      let summary = `# Strategic Academic Summary\n\n`;
-      summary += `Based on the provided resource materials and lecture documents:\n\n`;
-      summary += `## Key Core Tenets\n`;
-      summary += `- **Active Synthesis**: Mastery of these concepts requires dynamic application and problem set practice.\n`;
-      summary += `- **Spaced Repetition**: We recommend studying this material at 1, 3, and 7-day intervals to build long-term retention.\n\n`;
-      summary += `## Extracted Learning Modules\n`;
-      
-      const sentences = (content || '').split(/[.!?]+/).map((s: string) => s.trim()).filter((s: string) => s.length > 15);
-      if (sentences.length > 0) {
-        const limit = Math.min(sentences.length, 6);
-        for (let i = 0; i < limit; i++) {
-          summary += `- **Module ${i + 1}**: ${sentences[i]}.\n`;
-        }
-      } else {
-        summary += `- **Module 1**: Concept integration and terminology mapping.\n`;
-        summary += `- **Module 2**: Practical exercises with code challenges and mock verification.\n`;
-      }
-      return summary;
-    } else if (type === 'flashcards') {
-      const cards: any[] = [];
-      const sentences = (content || '').split(/[.!?]+/).map((s: string) => s.trim()).filter((s: string) => s.length > 20);
-      if (sentences.length >= 2) {
-        const total = Math.min(sentences.length, 6);
-        for (let i = 0; i < total; i++) {
-          const text = sentences[i];
-          const words = text.split(' ');
-          const front = words.slice(0, Math.ceil(words.length / 2)).join(' ') + "?";
-          const back = words.slice(Math.ceil(words.length / 2)).join(' ');
-          cards.push({ front, back });
-        }
-      } else {
-        cards.push(
-          { front: "What is the primary objective of this subject?", back: "To design optimal systems and establish complete academic retention." },
-          { front: "Explain active memory recall strategy.", back: "Forcing the brain to retrieve facts rather than passively re-reading text." },
-          { front: "Explain spaced repetition.", back: "Reviewing material at increasing intervals (e.g., 2 days, 1 week, 1 month) to secure memory tracks." },
-          { front: "What does deep learning and comprehension emphasize?", back: "The underlying principles and core connections between diverse modules." }
-        );
-      }
-      return cards;
-    } else if (type === 'quiz') {
-      const quiz: any[] = [];
-      const sentences = (content || '').split(/[.!?]+/).map((s: string) => s.trim()).filter((s: string) => s.length > 20);
-      if (sentences.length >= 2) {
-        const total = Math.min(sentences.length, 5);
-        for (let i = 0; i < total; i++) {
-          const text = sentences[i];
-          const words = text.split(' ');
-          const val = words.slice(Math.max(0, words.length - 3)).join(' ');
-          
-          quiz.push({
-            question: `Based on the reading content: "...${words.slice(0, Math.min(words.length, 12)).join(' ')} ______ ?"`,
-            options: [val, "Alternative concept model", "Standard syllabus terminology", "Simplified baseline abstraction"],
-            answer: val,
-            explanation: `As specified in the course text: "${text}"`
-          });
-        }
-      } else {
-        quiz.push(
-          {
-            question: "Which of the following describes the most robust strategy for exam preparation?",
-            options: ["Passive re-reading", "Active self-testing and mock exams", "Cramming the night before", "Highlighting full book pages"],
-            answer: "Active self-testing and mock exams",
-            explanation: "Empirical educational research consistently shows that self-testing (testing effect) increases long-term retention compared to passive reviewing."
-          },
-          {
-            question: "What is the primary benefit of the Pomodoro technique?",
-            options: ["Saves electricity", "Eliminates exams entirely", "Prevents mental fatigue and maintains high cognitive focus", "Improves reading speed automatically"],
-            answer: "Prevents mental fatigue and maintains high cognitive focus",
-            explanation: "By breaking study sessions with regular brief rests, the brain restores working focus, avoiding early burnout."
-          }
-        );
-      }
-      return quiz;
-    } else {
-      const test: any[] = [];
-      test.push(
-        {
-          question: "Which studying methodology is characterized by testing yourself on ideas rather than looking over notes?",
-          options: ["Active Recall", "Passive Scanning", "Note Highlighting", "Rote Memorization"],
-          answer: "Active Recall",
-          explanation: "Active recall forces the brain to retrieve information, building stronger neural pathways."
-        },
-        {
-          question: "True or False: Spacing study sessions distributes neural reinforcement over time, which optimizes consolidation in long-term memory.",
-          options: ["True", "False"],
-          answer: "True",
-          explanation: "Spaced repetition distributes dynamic review sequences, reinforcing memory traces over days rather than hours."
-        },
-        {
-          question: "Which learning mode centers on interactive exercises, mock problems, and challenges?",
-          options: ["Review", "Practice", "Deep Dive", "Reading"],
-          answer: "Practice",
-          explanation: "Practice mode engages tactile problem sets and interactive simulations to confirm theoretical concepts."
-        },
-        {
-          question: "True or False: According to cognitive science, passive review builds the illusion of competence.",
-          options: ["True", "False"],
-          answer: "True",
-          explanation: "Reading over highlighted text feels easy, leading students to overestimate how well they actually know the material."
-        }
-      );
-      return test;
-    }
-  };
-
   function cleanScriptFormatting(text: string): string {
     if (!text) return '';
     return text
@@ -3313,21 +2912,6 @@ Dr. Taylor: [spoken text]`;
 
     return { valid: true, durationSec };
   }
-
-  const getPodcastFallback = () => {
-    const rawScript = `Alex: Welcome to KorsIQ Revision Seminar! Dr. Taylor, can you explain the best strategy to maximize exam retention?
-Dr. Taylor: Hello Alex! The most effective approach is active recall and spaced repetition. Testing yourself on core concepts builds far stronger neural pathways than passive reading.
-Alex: That explains why timed practice quizzes and summary cards are so critical for exam preparation!
-Dr. Taylor: Exactly. Consistently testing yourself on key formulas and definitions ensures long-term memory consolidation.`;
-    const script = cleanScriptFormatting(rawScript);
-    const wavBuf = generateSpeechWav(script);
-    return { script, audioBase64: wavBuf.toString('base64') };
-  };
-
-  const getValidateFallback = () => ({
-    isRelevant: true,
-    reason: "KorsIQ Academic Integrity Validation passed in preview mode."
-  });
 
   // =============================================================
   // AI CREDITS LEDGER, ATOMIC SPEND/REFUND & BALANCE ENDPOINT

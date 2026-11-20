@@ -6,8 +6,6 @@ import {
   Users, 
   Folder, 
   Check, 
-  Plus, 
-  Bell, 
   X,
   Shield,
   HelpCircle,

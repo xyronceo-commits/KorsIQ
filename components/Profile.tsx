@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { UserProfile, UserFile } from '../types';
-import { ICONS } from '../constants';
 import {
   BILLING_ENABLED,
   PLANS,
@@ -24,7 +23,6 @@ import {
   AlertCircle,
   HardDrive,
   CreditCard,
-  Crown,
   Bell
 } from 'lucide-react';
 import SubscriptionCheckoutModal from './SubscriptionCheckoutModal';

@@ -11,7 +11,7 @@ import {
   RotateCcw,
   Loader2
 } from 'lucide-react';
-import { UserProfile, SubscriptionPlanType } from '../types';
+import { UserProfile } from '../types';
 import { getAccessToken, getCurrentUserId } from '../lib/supabase';
 import { PLANS, getPlanConfig, getPlanDisplayName } from '../lib/plans';
 

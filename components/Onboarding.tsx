@@ -4,7 +4,6 @@ import {
   Trash2, 
   ArrowRight, 
   Check, 
-  CheckCircle2,
   AlertCircle
 } from 'lucide-react';
 import { UserProfile, Course, Difficulty, SubscriptionTier } from '../types';
@@ -52,7 +51,6 @@ export const Onboarding: React.FC<OnboardingProps> = ({
   const [step, setStep] = useState<1 | 2 | 3>(1);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [validationError, setValidationError] = useState<string | null>(null);
-  const [showPaidPlanNotice, setShowPaidPlanNotice] = useState(false);
 
   // Form State
   const [name, setName] = useState(initialProfile?.name || '');

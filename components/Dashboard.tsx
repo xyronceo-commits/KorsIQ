@@ -13,13 +13,10 @@ import {
   Plus,
   CheckCircle2,
   Circle,
-  AlertCircle,
   BookOpen,
   Edit2,
   Trash2,
-  AlertTriangle,
   GraduationCap,
-  Filter
 } from 'lucide-react';
 
 interface DashboardProps {

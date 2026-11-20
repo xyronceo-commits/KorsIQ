@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { StudySession, Course } from '../types';
-import { DAYS, DIFFICULTY_COLORS } from '../constants';
+import { DAYS } from '../constants';
 import { 
   ArrowRight, 
   RotateCcw, 
@@ -8,13 +8,10 @@ import {
   BookOpen, 
   Clock, 
   Layers, 
-  Award, 
   BookMarked, 
   Calendar, 
   Download, 
   ExternalLink, 
-  Copy, 
-  Check, 
   X
 } from 'lucide-react';
 
@@ -81,7 +78,6 @@ const getModeMeta = (mode: string) => {
 const ScheduleView: React.FC<ScheduleViewProps> = ({ schedule, courses, onOpenHub }) => {
   const [selectedModeFilter, setSelectedModeFilter] = useState<string | null>(null);
   const [showExportModal, setShowExportModal] = useState(false);
-  const [copiedFeed, setCopiedFeed] = useState(false);
 
   const getCourse = (id: string) => courses.find(c => c.id === id);
 

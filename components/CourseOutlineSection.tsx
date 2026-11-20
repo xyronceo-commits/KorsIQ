@@ -6,7 +6,6 @@ import { getCurrentUserId, getAccessToken } from '../lib/supabase';
 import { BILLING_ENABLED, checkLimit } from '../lib/plans';
 import {
   calculateSemesterGpaNeeded,
-  calculateExamMarkNeeded,
   suggestRealisticGradeSpread,
   DEFAULT_GRADE_SCALE,
   SemesterGpaResult,
@@ -23,15 +22,11 @@ import {
   Calendar,
   ArrowRight,
   TrendingUp,
-  Target,
-  ChevronDown,
-  ChevronUp,
   X,
   Info,
   Loader2,
   Clock,
   BookOpen,
-  Edit2
 } from 'lucide-react';
 
 interface CourseOutlineSectionProps {

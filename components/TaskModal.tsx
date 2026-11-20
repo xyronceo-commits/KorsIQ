@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { AcademicTask, Course, TaskCategory, TaskPriority, TaskReminder } from '../types';
-import { X, Calendar, Clock, AlertCircle, BookOpen, Flag, CheckSquare } from 'lucide-react';
+import { X, Calendar, Clock, AlertCircle, CheckSquare } from 'lucide-react';
 
 interface TaskModalProps {
   isOpen: boolean;

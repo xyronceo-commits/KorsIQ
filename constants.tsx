@@ -1,7 +1,5 @@
 
-import React from 'react';
 import { 
-  LayoutDashboard, 
   BookOpen, 
   Calendar, 
   BrainCircuit, 
@@ -15,7 +13,6 @@ import {
   ChevronRight,
   ChevronDown,
   GraduationCap,
-  Sparkles,
   Search,
   BookMarked,
   Microscope,

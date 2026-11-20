@@ -3,7 +3,6 @@ import { Course, UserProfile, StudySession, StudyHubData, AcademicTask, TaskCate
 import CourseManager from './CourseManager';
 import CGPACalculator from './CGPACalculator';
 import TimetableView from './TimetableView';
-import ScheduleView from './ScheduleView';
 import TaskModal from './TaskModal';
 import CourseOutlineSection from './CourseOutlineSection';
 import { DBService } from '../services/db';
@@ -18,12 +17,8 @@ import {
   Edit2, 
   Award,
   BookOpen,
-  Calculator,
   CalendarDays,
-  Flag,
-  ChevronRight,
   TrendingUp,
-  Target
 } from 'lucide-react';
 
 export type PlannerViewMode = 'today' | 'week' | 'exams' | 'courses' | 'timetable' | 'cgpa' | 'outline';
