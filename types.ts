@@ -593,6 +593,8 @@ export interface StudioSection {
   id: string;
   outlineItemId: string;
   title: string;
+  kicker?: string;
+  takeaway?: string;
   level: 1 | 2 | 3;
   order: number;
   content: string;
@@ -635,13 +637,24 @@ export type DocumentTemplateId =
   | 'seminar-editorial'
   | 'executive-report';
 
+export type VectorSlideTemplateId =
+  | 'diagonal-slash'
+  | 'warm-geometric-arcs'
+  | 'swiss-monochrome'
+  | 'corporate-slant'
+  | 'architectural-frame'
+  | 'blue-wave-flow'
+  | 'editorial-split-dark'
+  | 'executive-concentric';
+
 export type SlideTemplateId =
   | 'pure-minimal'
   | 'academic-classic'
   | 'technical-grid'
   | 'seminar-editorial'
   | 'modern-pitch'
-  | 'executive-dark';
+  | 'executive-dark'
+  | VectorSlideTemplateId;
 
 export interface StudioBrief {
   title: string;
@@ -659,6 +672,8 @@ export interface StudioBrief {
   citationStyle: CitationStyle;
   targetLength: number;
   lengthUnit: StudioLengthUnit;
+  targetPages?: number;
+  targetWords?: number;
   documentStyle: StudioDocumentStyle;
   documentTemplateId?: DocumentTemplateId;
   documentPaletteId?: string;
@@ -729,10 +744,27 @@ export interface StudioJob {
   updatedAt: string;
 }
 
+export interface StudioCoverPageData {
+  title?: string;
+  subtitle?: string;
+  studentName?: string;
+  studentId?: string;
+  courseCode?: string;
+  courseTitle?: string;
+  department?: string;
+  faculty?: string;
+  institution?: string;
+  supervisorName?: string;
+  submissionDate?: string;
+  includeCoverPage?: boolean;
+  speakerNotes?: string;
+}
+
 export interface StudioConvertedVariant {
   fileFormat: StudioFileFormat;
   sections: StudioSection[];
   contentBlocks: StudioContentBlock[];
+  coverPage?: StudioCoverPageData;
   updatedAt: string;
 }
 
@@ -788,6 +820,8 @@ export interface AcademicDocumentMetadata {
   documentPaletteId?: string;
   slideTemplateId?: SlideTemplateId;
   slidePaletteId?: string;
+  coverPage?: StudioCoverPageData;
+  targetPages?: number;
   lastExportedAt?: string;
 }
 

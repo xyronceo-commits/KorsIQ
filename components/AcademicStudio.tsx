@@ -51,6 +51,7 @@ import {
   DocumentTemplateId,
   SlideTemplateId,
   StudioBrief,
+  StudioCoverPageData,
   StudioDocumentStatus,
   StudioFileFormat,
   StudioJob,
@@ -79,9 +80,11 @@ import {
   computeDocumentCardProgress,
   computeOutlineCompletion,
   formatQuotaResetLabel,
+  resolveTargetPagesForDoc,
   selectStudioHomeStatusBar,
   sortAcademicSections,
   STUDIO_DOWNLOAD_NOTICE,
+  wordsToEstimatedPages,
 } from '../lib/studioV2';
 import {
   documentTemplateToLegacyStyle,
@@ -236,6 +239,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
   const [v2Brief, setV2Brief] = useState<StudioBrief | null>(null);
   const [v2Outline, setV2Outline] = useState<StudioOutlineItem[]>([]);
   const [isDraftingV2Outline, setIsDraftingV2Outline] = useState(false);
+  const [v2OutlineError, setV2OutlineError] = useState<string | null>(null);
   const [isStartingV2Job, setIsStartingV2Job] = useState(false);
   const [v2JobStartError, setV2JobStartError] = useState<string | null>(null);
   const [studioJobs, setStudioJobs] = useState<StudioJob[]>([]);
@@ -417,13 +421,16 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     if (draftOutlineInFlightRef.current) return;
     draftOutlineInFlightRef.current = true;
     setIsDraftingV2Outline(true);
+    setV2OutlineError(null);
     try {
       const res = await GeminiService.generateStudioV2Outline(brief);
       setV2Brief(brief);
       setV2Outline(res.outline || []);
       setV2View('outline');
     } catch (err: any) {
-      showToast(err?.message || 'Could not draft outline.');
+      const msg = err?.message || 'Could not draft outline right now. Please try again.';
+      setV2OutlineError(msg);
+      showToast(msg);
     } finally {
       draftOutlineInFlightRef.current = false;
       setIsDraftingV2Outline(false);
@@ -822,16 +829,24 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
     persistDocument(updatedDoc);
   };
 
-  // Helper: Edit active slide title or speaker notes cleanly in Slide Edit mode
-  const handleSlideMetaChange = (patch: { title?: string; speakerNotes?: string }) => {
+  // Helper: Edit active slide title, kicker, takeaway, or speaker notes cleanly (0 credits)
+  const handleSlideMetaChange = (patch: { title?: string; speakerNotes?: string; kicker?: string; takeaway?: string }) => {
     if (!activeDocument || !activeSectionId) return;
     const nowIso = new Date().toISOString();
+    const mapSec = (s: StudioSection): StudioSection =>
+      s.id === activeSectionId
+        ? {
+            ...s,
+            ...(patch.title !== undefined ? { title: patch.title } : {}),
+            ...(patch.kicker !== undefined ? { kicker: patch.kicker } : {}),
+            ...(patch.takeaway !== undefined ? { takeaway: patch.takeaway } : {}),
+            lastEditedAt: nowIso,
+          }
+        : s;
 
     if (activeVariant === 'slides' && activeDocument.convertedVariants?.slides) {
       const variant = activeDocument.convertedVariants.slides;
-      const nextSections = patch.title !== undefined
-        ? variant.sections.map((s) => (s.id === activeSectionId ? { ...s, title: patch.title!, lastEditedAt: nowIso } : s))
-        : variant.sections;
+      const nextSections = variant.sections.map(mapSec);
       let nextBlocks = variant.contentBlocks || [];
       if (patch.speakerNotes !== undefined || patch.title !== undefined) {
         const hasBlock = nextBlocks.some((b) => b.type === 'slide' && b.sectionId === activeSectionId);
@@ -870,9 +885,7 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
       return;
     }
 
-    const nextSections = patch.title !== undefined
-      ? activeDocument.sections.map((s) => (s.id === activeSectionId ? { ...s, title: patch.title!, lastEditedAt: nowIso } : s))
-      : activeDocument.sections;
+    const nextSections = activeDocument.sections.map(mapSec);
     let nextBlocks = activeDocument.contentBlocks || [];
     if (patch.speakerNotes !== undefined || patch.title !== undefined) {
       const hasBlock = nextBlocks.some((b) => b.type === 'slide' && b.sectionId === activeSectionId);
@@ -905,6 +918,168 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
       ...activeDocument,
       sections: nextSections,
       contentBlocks: nextBlocks,
+    });
+  };
+
+  // Helper: Persist inline Cover Page / Title Slide edits (0 credits, zero AI calls)
+  const handleCoverPageChange = (patch: Partial<StudioCoverPageData>) => {
+    if (!activeDocument) return;
+    const nowIso = new Date().toISOString();
+    const mergedCover: StudioCoverPageData = {
+      ...(activeDocument.metadata?.coverPage || {}),
+      ...patch,
+    };
+    const nextDoc: AcademicDocument = {
+      ...activeDocument,
+      title: patch.title !== undefined ? patch.title : activeDocument.title,
+      metadata: {
+        ...(activeDocument.metadata || {}),
+        ...(patch.includeCoverPage !== undefined ? { includeCoverPage: patch.includeCoverPage } : {}),
+        ...(patch.studentName !== undefined ? { studentName: patch.studentName } : {}),
+        ...(patch.studentId !== undefined ? { studentId: patch.studentId } : {}),
+        ...(patch.courseCode !== undefined ? { courseCode: patch.courseCode } : {}),
+        ...(patch.courseTitle !== undefined ? { courseTitle: patch.courseTitle } : {}),
+        ...(patch.department !== undefined ? { department: patch.department } : {}),
+        ...(patch.faculty !== undefined ? { faculty: patch.faculty } : {}),
+        ...(patch.institution !== undefined ? { institution: patch.institution } : {}),
+        ...(patch.supervisorName !== undefined ? { lecturerName: patch.supervisorName } : {}),
+        ...(patch.submissionDate !== undefined ? { submissionDate: patch.submissionDate } : {}),
+        coverPage: mergedCover,
+      },
+      ...(activeVariant !== 'primary' && activeDocument.convertedVariants?.[activeVariant]
+        ? {
+            convertedVariants: {
+              ...activeDocument.convertedVariants,
+              [activeVariant]: {
+                ...activeDocument.convertedVariants[activeVariant]!,
+                coverPage: {
+                  ...(activeDocument.convertedVariants[activeVariant]?.coverPage || mergedCover),
+                  ...patch,
+                },
+                updatedAt: nowIso,
+              },
+            },
+          }
+        : {}),
+      updatedAt: nowIso,
+    };
+    persistDocument(nextDoc);
+  };
+
+  // Helper: Update any section or slide list on the active variant (0 credits)
+  const updateActiveSections = (updater: (secs: StudioSection[]) => StudioSection[], nextSelectId?: string) => {
+    if (!activeDocument) return;
+    const nowIso = new Date().toISOString();
+    if (activeVariant !== 'primary' && activeDocument.convertedVariants?.[activeVariant]) {
+      const variant = activeDocument.convertedVariants[activeVariant]!;
+      const nextSecs = updater(variant.sections).map((s, idx) => ({ ...s, order: idx + 1 }));
+      persistDocument({
+        ...activeDocument,
+        convertedVariants: {
+          ...activeDocument.convertedVariants,
+          [activeVariant]: { ...variant, sections: nextSecs, updatedAt: nowIso },
+        },
+        updatedAt: nowIso,
+      });
+    } else {
+      const nextSecs = updater(activeDocument.sections).map((s, idx) => ({ ...s, order: idx + 1 }));
+      const totalWords = nextSecs.reduce((acc, s) => acc + (s.wordCount || 0), 0);
+      persistDocument({
+        ...activeDocument,
+        sections: nextSecs,
+        currentWordCount: totalWords,
+        updatedAt: nowIso,
+      });
+    }
+    if (nextSelectId) setActiveSectionId(nextSelectId);
+  };
+
+  const handleSectionTitleChange = (sectionId: string, title: string) => {
+    const nowIso = new Date().toISOString();
+    updateActiveSections((secs) =>
+      secs.map((s) => (s.id === sectionId ? { ...s, title, lastEditedAt: nowIso } : s))
+    );
+  };
+
+  const handleAddSection = () => {
+    const newId = `sec_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    const nowIso = new Date().toISOString();
+    const newSec: StudioSection = {
+      id: newId,
+      outlineItemId: `out_${newId}`,
+      title: activeIsSlides ? 'New Slide' : 'New Section',
+      level: 1,
+      order: activeSections.length + 1,
+      content: activeIsSlides ? '- Key point' : '',
+      wordCount: activeIsSlides ? 2 : 0,
+      citations: [],
+      status: 'drafted',
+      lastEditedAt: nowIso,
+    };
+    updateActiveSections((secs) => [...secs, newSec], newId);
+  };
+
+  const handleDuplicateSection = (sectionId: string) => {
+    const nowIso = new Date().toISOString();
+    const newId = `sec_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+    updateActiveSections((secs) => {
+      const idx = secs.findIndex((s) => s.id === sectionId);
+      if (idx < 0) return secs;
+      const orig = secs[idx];
+      const copy: StudioSection = {
+        ...orig,
+        id: newId,
+        outlineItemId: `out_${newId}`,
+        title: `${orig.title} (Copy)`,
+        lastEditedAt: nowIso,
+      };
+      const next = [...secs];
+      next.splice(idx + 1, 0, copy);
+      return next;
+    }, newId);
+  };
+
+  const handleMoveSection = (sectionId: string, dir: -1 | 1) => {
+    updateActiveSections((secs) => {
+      const idx = secs.findIndex((s) => s.id === sectionId);
+      const target = idx + dir;
+      if (idx < 0 || target < 0 || target >= secs.length) return secs;
+      const next = [...secs];
+      const [moved] = next.splice(idx, 1);
+      next.splice(target, 0, moved);
+      return next;
+    });
+  };
+
+  const handleDeleteSection = (sectionId: string) => {
+    if (activeSections.length <= 1) return;
+    const idx = activeSections.findIndex((s) => s.id === sectionId);
+    const fallback = activeSections[Math.max(0, idx - 1)]?.id || activeSections[0]?.id;
+    updateActiveSections(
+      (secs) => secs.filter((s) => s.id !== sectionId),
+      fallback && fallback !== sectionId ? fallback : '__cover_page__'
+    );
+  };
+
+  const handleUpdateReference = (refId: string, patch: Partial<StudioReference>) => {
+    if (!activeDocument) return;
+    const nextRefs = (activeDocument.references || []).map((r) =>
+      r.id === refId ? { ...r, ...patch } : r
+    );
+    persistDocument({
+      ...activeDocument,
+      references: nextRefs,
+      updatedAt: new Date().toISOString(),
+    });
+  };
+
+  const handleDeleteReference = (refId: string) => {
+    if (!activeDocument) return;
+    const nextRefs = (activeDocument.references || []).filter((r) => r.id !== refId);
+    persistDocument({
+      ...activeDocument,
+      references: nextRefs,
+      updatedAt: new Date().toISOString(),
     });
   };
 
@@ -1682,7 +1857,11 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           initialBrief={v2Brief || undefined}
           isSubmitting={isDraftingV2Outline}
           weeklyQuota={weeklyQuota}
-          onCancel={() => setV2View('list')}
+          externalError={v2OutlineError}
+          onCancel={() => {
+            setV2OutlineError(null);
+            setV2View('list');
+          }}
           onSubmit={handleV2DraftOutline}
         />
       )}
@@ -2169,7 +2348,19 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
             {/* Approval Action Footer */}
             <div className="pt-5 border-t border-slate-200 dark:border-slate-800 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
               <div className="text-xs text-slate-500 font-medium">
-                Allocated word goal: <strong>{activeDocument.targetWordCount.toLocaleString()} words</strong> across {activeDocument.outline.length} sections.
+                {isSlideDocument(activeDocument) ? (
+                  <>
+                    Planned deck: <strong>{activeDocument.outline.length} slides</strong>.
+                  </>
+                ) : (
+                  <>
+                    Estimated length:{' '}
+                    <strong>
+                      ~{resolveTargetPagesForDoc(activeDocument)} pages
+                    </strong>{' '}
+                    across {activeDocument.outline.length} sections.
+                  </>
+                )}
               </div>
 
               <button
@@ -2303,6 +2494,14 @@ export const AcademicStudio: React.FC<AcademicStudioProps> = ({
           editorText={editorText}
           onEditorChangeWithHistory={handleEditorChangeWithHistory}
           onSlideMetaChange={handleSlideMetaChange}
+          onCoverPageChange={handleCoverPageChange}
+          onSectionTitleChange={handleSectionTitleChange}
+          onAddSection={handleAddSection}
+          onDuplicateSection={handleDuplicateSection}
+          onMoveSection={handleMoveSection}
+          onDeleteSection={handleDeleteSection}
+          onUpdateReference={handleUpdateReference}
+          onDeleteReference={handleDeleteReference}
           selectedTextSnippet={selectedTextSnippet}
           onSelectTextSnippet={(snippet, range) => {
             setSelectedTextSnippet(snippet);

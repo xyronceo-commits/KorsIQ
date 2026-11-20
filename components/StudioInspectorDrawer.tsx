@@ -30,7 +30,7 @@ import {
   getSlideTemplateForDoc,
 } from '../lib/studioTemplates';
 import { BILLING_ENABLED } from '../lib/plans';
-import { STUDIO_DOWNLOAD_NOTICE } from '../lib/studioV2';
+import { resolveTargetPagesForDoc, STUDIO_DOWNLOAD_NOTICE, wordsToEstimatedPages } from '../lib/studioV2';
 import { PaletteSwatchRow } from './StudioTemplatePicker';
 
 export type StudioInspectorTab = 'sources' | 'ai' | 'brief' | 'template';
@@ -363,9 +363,11 @@ export const StudioInspectorDrawer: React.FC<StudioInspectorDrawerProps> = ({
                 <span className="font-medium text-[#111827] dark:text-white capitalize text-right">
                   {profile?.level || 'Undergraduate'}
                 </span>
-                <span className="text-[#5B6472]">Words</span>
+                <span className="text-[#5B6472]">Length</span>
                 <span className="font-medium text-[#111827] dark:text-white text-right tabular-nums">
-                  {doc.currentWordCount.toLocaleString()} / {doc.targetWordCount.toLocaleString()}
+                  {activeIsSlides
+                    ? `${Math.max(1, doc.sections.length + 1)} slides`
+                    : `~${doc.currentWordCount > 0 ? wordsToEstimatedPages(doc.currentWordCount) : resolveTargetPagesForDoc(doc)} pages`}
                 </span>
                 {doc.subject && (
                   <>

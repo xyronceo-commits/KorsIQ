@@ -7,7 +7,7 @@ import {
   resolveSlideTemplate,
 } from '../lib/studioTemplates';
 import { BILLING_ENABLED } from '../lib/plans';
-import { formatQuotaResetLabel } from '../lib/studioV2';
+import { formatQuotaResetLabel, wordsToEstimatedPages } from '../lib/studioV2';
 import { StudioTemplateModal } from './StudioTemplatePicker';
 
 interface StudioOutlineReviewProps {
@@ -39,6 +39,7 @@ export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const isSlides = brief.fileFormat === 'pptx' || brief.docType === 'presentation';
   const totalBudget = outline.reduce((sum, item) => sum + (Number(item.targetWords) || 0), 0);
+  const estimatedPages = wordsToEstimatedPages(totalBudget);
   const activeDocTemplate = resolveDocumentTemplate(
     brief.documentTemplateId,
     brief.documentPaletteId,
@@ -129,7 +130,9 @@ export const StudioOutlineReview: React.FC<StudioOutlineReviewProps> = ({
           </span>
           <span className="opacity-60">·</span>
           <span>
-            {outline.length} parts · ~{totalBudget.toLocaleString()} words planned
+            {isSlides
+              ? `${outline.length} ${outline.length === 1 ? 'slide' : 'slides'} planned`
+              : `${outline.length} parts · ~${estimatedPages} ${estimatedPages === 1 ? 'page' : 'pages'} planned`}
           </span>
         </div>
         <div className="flex items-center gap-2">
