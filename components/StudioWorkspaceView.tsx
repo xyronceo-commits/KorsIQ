@@ -1,6 +1,8 @@
 import React, { useEffect, useRef } from 'react';
 import {
+  ArrowDown,
   ArrowLeft,
+  ArrowUp,
   BookOpen,
   CheckCircle2,
   ChevronDown,
@@ -11,16 +13,19 @@ import {
   Layers,
   LayoutTemplate,
   PanelLeft,
+  Plus,
   Presentation,
   RefreshCw,
   RotateCcw,
   Sliders,
+  Trash2,
   X,
 } from 'lucide-react';
 import {
   AcademicDocument,
   DocumentTemplateId,
   SlideTemplateId,
+  StudioCoverPageData,
   StudioFileFormat,
   StudioReference,
   StudioReviewSuggestion,
@@ -34,9 +39,13 @@ import {
   getSlideTemplateForDoc,
   slideTemplateToVisualPalette,
 } from '../lib/studioTemplates';
+import { resolveDocumentCoverPage, resolveSlideCoverPage } from '../lib/studioCover';
+import { wordsToEstimatedPages } from '../lib/studioV2';
 import { BILLING_ENABLED } from '../lib/plans';
 import StudioVisualCard from './StudioVisualCard';
 import { StudioTemplateModal } from './StudioTemplatePicker';
+import StudioCoverEditor from './StudioCoverEditor';
+import StudioSlideCanvasEditor from './StudioSlideCanvasEditor';
 import {
   StudioDocumentPreview,
   StudioSlideDeckPreview,
@@ -69,7 +78,15 @@ interface StudioWorkspaceViewProps {
   onToggleTemplateSwitchModal: (open: boolean) => void;
   editorText: string;
   onEditorChangeWithHistory: (val: string) => void;
-  onSlideMetaChange: (patch: { title?: string; speakerNotes?: string }) => void;
+  onSlideMetaChange: (patch: { title?: string; speakerNotes?: string; kicker?: string; takeaway?: string }) => void;
+  onCoverPageChange: (patch: Partial<StudioCoverPageData>) => void;
+  onSectionTitleChange: (sectionId: string, title: string) => void;
+  onAddSection: () => void;
+  onDuplicateSection: (sectionId: string) => void;
+  onMoveSection: (sectionId: string, dir: -1 | 1) => void;
+  onDeleteSection: (sectionId: string) => void;
+  onUpdateReference: (refId: string, patch: Partial<StudioReference>) => void;
+  onDeleteReference: (refId: string) => void;
   selectedTextSnippet: string;
   onSelectTextSnippet: (snippet: string, range: { start: number; end: number } | null) => void;
   historyIndex: number;
@@ -129,6 +146,14 @@ export const StudioWorkspaceView: React.FC<StudioWorkspaceViewProps> = ({
   editorText,
   onEditorChangeWithHistory,
   onSlideMetaChange,
+  onCoverPageChange,
+  onSectionTitleChange,
+  onAddSection,
+  onDuplicateSection,
+  onMoveSection,
+  onDeleteSection,
+  onUpdateReference,
+  onDeleteReference,
   selectedTextSnippet,
   onSelectTextSnippet,
   historyIndex,
@@ -173,9 +198,14 @@ export const StudioWorkspaceView: React.FC<StudioWorkspaceViewProps> = ({
 
   const docTemplate = getDocumentTemplateForDoc(doc);
   const slideTemplate = getSlideTemplateForDoc(doc);
+  const docCover = resolveDocumentCoverPage(doc);
+  const slideCover = resolveSlideCoverPage(doc);
   const activeVisualPalette = activeIsSlides
     ? slideTemplateToVisualPalette(slideTemplate)
     : documentTemplateToVisualPalette(docTemplate);
+
+  const isCoverSelected = activeSectionId === '__cover_page__';
+  const isReferencesSelected = activeSectionId === '__references__';
 
   const sourceCount = doc.references.length;
   const hasSlidesVariant = Boolean(doc.convertedVariants?.slides);
@@ -209,7 +239,12 @@ export const StudioWorkspaceView: React.FC<StudioWorkspaceViewProps> = ({
   const handleOutlineClick = (secId: string) => {
     onSelectSectionId(secId);
     if (workspaceMode === 'preview' && !activeIsSlides) {
-      const targetEl = document.getElementById(getSectionAnchorId(secId));
+      const targetEl =
+        secId === '__cover_page__'
+          ? document.getElementById('studio-preview-cover')
+          : secId === '__references__'
+          ? document.getElementById('studio-preview-references')
+          : document.getElementById(getSectionAnchorId(secId));
       if (targetEl) {
         targetEl.scrollIntoView({ behavior: 'smooth', block: 'start' });
       }
@@ -241,8 +276,34 @@ export const StudioWorkspaceView: React.FC<StudioWorkspaceViewProps> = ({
       </div>
 
       <nav className="flex-1 overflow-y-auto px-2.5 py-3 space-y-1" aria-label="Document outline">
+        {/* First-class Cover Page / Slide 1 entry */}
+        <button
+          type="button"
+          data-outline-item="__cover_page__"
+          onClick={() => handleOutlineClick('__cover_page__')}
+          className={`w-full text-left py-2.5 px-3 rounded-lg transition-colors cursor-pointer flex items-start gap-2.5 ${
+            isCoverSelected
+              ? 'bg-[#EFF6FF] dark:bg-blue-950/60 text-[#2563EB] dark:text-blue-300 font-semibold'
+              : 'text-[#111827] dark:text-slate-300 hover:bg-slate-100/80 dark:hover:bg-slate-800/70'
+          }`}
+        >
+          <span className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 bg-[#2563EB]" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs leading-snug truncate">
+              {activeIsSlides ? '01. Cover Slide' : 'Cover Page'}
+            </p>
+            <p className="text-[11px] text-[#5B6472] dark:text-slate-400 mt-0.5 truncate">
+              {activeIsSlides
+                ? slideCover.title || 'Title & Presenter'
+                : docCover.includeCoverPage
+                ? 'Page 1 · Title & Metadata'
+                : 'Hidden on export'}
+            </p>
+          </div>
+        </button>
+
         {activeSections.map((sec, idx) => {
-          const isActive = sec.id === currentSection?.id;
+          const isActive = !isCoverSelected && !isReferencesSelected && sec.id === currentSection?.id;
           const hasText = Boolean(sec.content && sec.content.trim().length > 0);
           return (
             <button
@@ -263,7 +324,7 @@ export const StudioWorkspaceView: React.FC<StudioWorkspaceViewProps> = ({
               />
               <div className="min-w-0 flex-1">
                 <p className="text-xs leading-snug line-clamp-2">
-                  {activeIsSlides ? `${String(idx + 1).padStart(2, '0')}. ${sec.title}` : sec.title}
+                  {activeIsSlides ? `${String(idx + 2).padStart(2, '0')}. ${sec.title}` : sec.title}
                 </p>
                 <p className="text-[11px] text-[#5B6472] dark:text-slate-400 mt-0.5 tabular-nums">
                   {sec.wordCount || 0} words
@@ -272,6 +333,44 @@ export const StudioWorkspaceView: React.FC<StudioWorkspaceViewProps> = ({
             </button>
           );
         })}
+
+        {/* First-class References / Bibliography entry at the end */}
+        <button
+          type="button"
+          data-outline-item="__references__"
+          onClick={() => handleOutlineClick('__references__')}
+          className={`w-full text-left py-2.5 px-3 rounded-lg transition-colors cursor-pointer flex items-start gap-2.5 ${
+            isReferencesSelected
+              ? 'bg-[#EFF6FF] dark:bg-blue-950/60 text-[#2563EB] dark:text-blue-300 font-semibold'
+              : 'text-[#111827] dark:text-slate-300 hover:bg-slate-100/80 dark:hover:bg-slate-800/70'
+          }`}
+        >
+          <span className="w-1.5 h-1.5 rounded-full mt-1.5 shrink-0 bg-slate-400" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs leading-snug truncate">
+              {activeIsSlides ? `${String(activeSections.length + 2).padStart(2, '0')}. References` : 'References'}
+            </p>
+            <p className="text-[11px] text-[#5B6472] dark:text-slate-400 mt-0.5 tabular-nums">
+              {sourceCount} {sourceCount === 1 ? 'source' : 'sources'}
+            </p>
+          </div>
+        </button>
+
+        {/* Quick + Add Section / + Add Slide button in Edit mode */}
+        <div className="pt-2 px-1">
+          <button
+            type="button"
+            onClick={() => {
+              onAddSection();
+              if (workspaceMode !== 'edit') onChangeWorkspaceMode('edit');
+            }}
+            data-outline-add-btn="true"
+            className="w-full py-2 px-3 rounded-lg border border-dashed border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-xs font-medium text-[#5B6472] hover:text-[#2563EB] flex items-center justify-center gap-1.5 cursor-pointer transition-colors"
+          >
+            <Plus size={13} />
+            <span>{activeIsSlides ? 'Add Slide' : 'Add Section'}</span>
+          </button>
+        </div>
       </nav>
     </div>
   );
@@ -321,7 +420,11 @@ export const StudioWorkspaceView: React.FC<StudioWorkspaceViewProps> = ({
               <CheckCircle2 size={11} className="text-emerald-600 shrink-0" />
               <span>Saved</span>
               <span>·</span>
-              <span className="tabular-nums">{totalWords.toLocaleString()} words</span>
+              <span className="tabular-nums">
+                {activeIsSlides
+                  ? `${activeSections.length + 1} slides`
+                  : `~${wordsToEstimatedPages(totalWords)} ${wordsToEstimatedPages(totalWords) === 1 ? 'page' : 'pages'}`}
+              </span>
             </p>
           </div>
         </div>
@@ -661,7 +764,7 @@ export const StudioWorkspaceView: React.FC<StudioWorkspaceViewProps> = ({
           ) : (
             /* DISTRACTION-FREE EDIT MODE */
             <div
-              className="w-full max-w-[760px] mx-auto my-6 sm:my-8 space-y-4"
+              className={`w-full ${activeIsSlides ? 'max-w-[920px]' : 'max-w-[780px]'} mx-auto my-6 sm:my-8 space-y-4`}
               data-edit-mode={activeIsSlides ? 'slides' : 'document'}
               data-active-template-id={activeIsSlides ? slideTemplate.id : docTemplate.id}
               data-active-palette-id={
@@ -692,107 +795,256 @@ export const StudioWorkspaceView: React.FC<StudioWorkspaceViewProps> = ({
                   </button>
                 </div>
 
-                <div className="flex items-center gap-1.5">
-                  <button
-                    type="button"
-                    onClick={() =>
-                      onContextualAssist(
-                        selectedTextSnippet
-                          ? 'Elevate academic tone and vocabulary'
-                          : 'Improve academic clarity, structure, and scholarly tone'
-                      )
-                    }
-                    disabled={isSectionGenerating || isAssistLoading || !editorText}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-xs font-medium text-[#111827] dark:text-slate-200 disabled:opacity-40 min-h-[36px] cursor-pointer"
-                  >
-                    <RefreshCw size={12} />
-                    <span>
-                      {isAssistLoading
-                        ? 'Rewriting...'
-                        : BILLING_ENABLED
-                        ? 'Rewrite (1)'
-                        : 'Rewrite'}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={onGenerateActiveSection}
-                    disabled={isSectionGenerating || !!batchProgress}
-                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#2563EB] hover:bg-[#1746A2] text-white text-xs font-semibold disabled:opacity-50 min-h-[36px] cursor-pointer"
-                  >
-                    <Edit3 size={12} />
-                    <span>
-                      {isSectionGenerating
-                        ? 'Drafting...'
-                        : BILLING_ENABLED
-                        ? 'Write Section (3)'
-                        : 'Write Section'}
-                    </span>
-                  </button>
-                </div>
+                {!isCoverSelected && !isReferencesSelected && (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() =>
+                        onContextualAssist(
+                          selectedTextSnippet
+                            ? 'Elevate academic tone and vocabulary'
+                            : 'Improve academic clarity, structure, and scholarly tone'
+                        )
+                      }
+                      disabled={isSectionGenerating || isAssistLoading || !editorText}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB] text-xs font-medium text-[#111827] dark:text-slate-200 disabled:opacity-40 min-h-[36px] cursor-pointer"
+                    >
+                      <RefreshCw size={12} />
+                      <span>
+                        {isAssistLoading
+                          ? 'Rewriting...'
+                          : BILLING_ENABLED
+                          ? 'Rewrite (1)'
+                          : 'Rewrite'}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={onGenerateActiveSection}
+                      disabled={isSectionGenerating || !!batchProgress}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-md bg-[#2563EB] hover:bg-[#1746A2] text-white text-xs font-semibold disabled:opacity-50 min-h-[36px] cursor-pointer"
+                    >
+                      <Edit3 size={12} />
+                      <span>
+                        {isSectionGenerating
+                          ? 'Drafting...'
+                          : BILLING_ENABLED
+                          ? 'Write Section (3)'
+                          : 'Write Section'}
+                      </span>
+                    </button>
+                  </div>
+                )}
               </div>
 
-              {/* Spacious Clean Paper / Slide Editor */}
-              <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-xl p-5 sm:p-9 space-y-5 shadow-2xs">
-                <div className="flex items-center justify-between gap-3">
-                  <span className="text-[11px] font-semibold uppercase tracking-wider text-[#2563EB]">
-                    {activeIsSlides
-                      ? `Slide ${currentSectionIndex + 1} of ${activeSections.length}`
-                      : `Section ${currentSectionIndex + 1} of ${activeSections.length}`}
-                  </span>
-                  <span className="text-xs text-[#5B6472] tabular-nums">
-                    {editorText.trim().split(/\s+/).filter(Boolean).length} words · Autosaved
-                  </span>
+              {/* 1. COVER PAGE / SLIDE 1 EDITOR */}
+              {isCoverSelected ? (
+                activeIsSlides ? (
+                  <StudioSlideCanvasEditor
+                    mode="cover"
+                    template={slideTemplate}
+                    cover={slideCover}
+                    slideIndex={0}
+                    totalSlides={activeSections.length}
+                    bulletsText=""
+                    speakerNotes={slideCover.speakerNotes}
+                    onChangeCover={onCoverPageChange}
+                    onChangeSlideTitle={() => {}}
+                    onChangeSlideMeta={() => {}}
+                    onChangeBulletsText={() => {}}
+                    onAddSlide={onAddSection}
+                    onDuplicateSlide={() => {}}
+                    onMoveSlide={() => {}}
+                    onDeleteSlide={() => {}}
+                  />
+                ) : (
+                  <StudioCoverEditor
+                    cover={docCover}
+                    template={docTemplate}
+                    onChange={onCoverPageChange}
+                  />
+                )
+              ) : isReferencesSelected ? (
+                /* 2. INLINE REFERENCES / BIBLIOGRAPHY EDITOR */
+                <div
+                  className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-xl p-5 sm:p-8 space-y-5 shadow-2xs"
+                  data-references-editor="true"
+                >
+                  <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-[#E5E7EB] dark:border-slate-800">
+                    <div>
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-[#2563EB]">
+                        {activeIsSlides ? 'References Slide' : 'References / Bibliography'}
+                      </span>
+                      <h2 className="text-lg font-bold text-[#111827] dark:text-white mt-0.5">
+                        Edit Sources ({doc.references.length})
+                      </h2>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={onOpenAddRefModal}
+                      className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-[#2563EB] hover:bg-[#1746A2] text-white text-xs font-semibold min-h-[36px] cursor-pointer"
+                    >
+                      <Plus size={13} />
+                      <span>Add Reference</span>
+                    </button>
+                  </div>
+
+                  {doc.references.length === 0 ? (
+                    <div className="py-10 text-center space-y-2">
+                      <p className="text-sm font-medium text-[#111827] dark:text-white">
+                        No references added yet
+                      </p>
+                      <p className="text-xs text-[#5B6472]">
+                        Click "Add Reference" to add a citation. It syncs automatically with your Sources drawer and exports.
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {doc.references.map((ref, idx) => (
+                        <div
+                          key={ref.id}
+                          className="p-4 rounded-lg border border-[#E5E7EB] dark:border-slate-800 bg-[#F8FAFC] dark:bg-slate-950/60 space-y-2.5"
+                        >
+                          <div className="flex items-center justify-between gap-2">
+                            <span className="text-[11px] font-mono font-semibold text-[#5B6472]">
+                              [{idx + 1}]
+                            </span>
+                            <button
+                              type="button"
+                              onClick={() => onDeleteReference(ref.id)}
+                              aria-label={`Remove reference ${idx + 1}`}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] text-[#5B6472] hover:text-red-600 rounded cursor-pointer"
+                            >
+                              <Trash2 size={12} />
+                              <span>Remove</span>
+                            </button>
+                          </div>
+                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                            <input
+                              type="text"
+                              value={ref.authors}
+                              onChange={(e) => onUpdateReference(ref.id, { authors: e.target.value })}
+                              placeholder="Authors (e.g., Smith, J.)"
+                              className="sm:col-span-2 px-2.5 py-1.5 text-xs bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-700 rounded-md text-[#111827] dark:text-white outline-none focus:border-[#2563EB]"
+                            />
+                            <input
+                              type="text"
+                              value={ref.year || ''}
+                              onChange={(e) => onUpdateReference(ref.id, { year: e.target.value })}
+                              placeholder="Year (e.g., 2024)"
+                              className="px-2.5 py-1.5 text-xs bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-700 rounded-md text-[#111827] dark:text-white outline-none focus:border-[#2563EB]"
+                            />
+                          </div>
+                          <input
+                            type="text"
+                            value={ref.title}
+                            onChange={(e) => onUpdateReference(ref.id, { title: e.target.value })}
+                            placeholder="Publication / Book / Article Title"
+                            className="w-full px-2.5 py-1.5 text-xs font-medium bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-700 rounded-md text-[#111827] dark:text-white outline-none focus:border-[#2563EB]"
+                          />
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                            <input
+                              type="text"
+                              value={ref.journal || ''}
+                              onChange={(e) => onUpdateReference(ref.id, { journal: e.target.value })}
+                              placeholder="Journal / Publisher (optional)"
+                              className="px-2.5 py-1.5 text-xs bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-700 rounded-md text-[#111827] dark:text-white outline-none focus:border-[#2563EB]"
+                            />
+                            <input
+                              type="text"
+                              value={ref.doi || ref.url || ''}
+                              onChange={(e) =>
+                                onUpdateReference(
+                                  ref.id,
+                                  e.target.value.startsWith('http')
+                                    ? { url: e.target.value }
+                                    : { doi: e.target.value }
+                                )
+                              }
+                              placeholder="DOI or URL (optional)"
+                              className="px-2.5 py-1.5 text-xs font-mono bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-700 rounded-md text-[#111827] dark:text-white outline-none focus:border-[#2563EB]"
+                            />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-
-                {activeIsSlides ? (
-                  /* Structured Slide Editor: Title + Bullets + Speaker Notes */
-                  <div className="space-y-5">
-                    <div>
-                      <label className="block text-xs font-medium text-[#5B6472] mb-1.5">
-                        Slide Title
-                      </label>
-                      <input
-                        type="text"
-                        value={currentSection?.title || ''}
-                        onChange={(e) => onSlideMetaChange({ title: e.target.value })}
-                        placeholder="Enter slide heading..."
-                        className="w-full px-3.5 py-2.5 bg-[#F8FAFC] dark:bg-slate-950 border border-[#E5E7EB] dark:border-slate-800 rounded-lg text-base font-bold text-[#111827] dark:text-white outline-none focus:border-[#2563EB]"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-medium text-[#5B6472] mb-1.5">
-                        Bullet Points (one point per line)
-                      </label>
-                      <textarea
-                        value={editorText}
-                        onChange={(e) => onEditorChangeWithHistory(e.target.value)}
-                        rows={10}
-                        placeholder="- Key finding or takeaway&#10;- Supporting evidence&#10;- Practical implication"
-                        className="w-full p-4 bg-[#F8FAFC] dark:bg-slate-950 border border-[#E5E7EB] dark:border-slate-800 rounded-lg text-sm leading-[1.7] text-[#111827] dark:text-slate-100 outline-none focus:border-[#2563EB] resize-y"
-                      />
-                    </div>
-
-                    <div>
-                      <label className="block text-xs font-medium text-[#5B6472] mb-1.5">
-                        Speaker Notes (included in exported .pptx)
-                      </label>
-                      <textarea
-                        value={activeSlideNotes}
-                        onChange={(e) => onSlideMetaChange({ speakerNotes: e.target.value })}
-                        rows={4}
-                        placeholder="Optional presenter talking points..."
-                        className="w-full p-3.5 bg-[#F8FAFC] dark:bg-slate-950 border border-[#E5E7EB] dark:border-slate-800 rounded-lg text-xs leading-relaxed text-[#111827] dark:text-slate-200 outline-none focus:border-[#2563EB] resize-y"
-                      />
+              ) : activeIsSlides ? (
+                /* 3. INTERACTIVE 16:9 SLIDE CANVAS EDITOR */
+                <StudioSlideCanvasEditor
+                  mode="slide"
+                  template={slideTemplate}
+                  cover={slideCover}
+                  slideSection={currentSection}
+                  slideIndex={currentSectionIndex}
+                  totalSlides={activeSections.length}
+                  bulletsText={editorText}
+                  speakerNotes={activeSlideNotes}
+                  onChangeCover={onCoverPageChange}
+                  onChangeSlideTitle={(title) => onSlideMetaChange({ title })}
+                  onChangeSlideMeta={(patch) => onSlideMetaChange(patch)}
+                  onChangeBulletsText={onEditorChangeWithHistory}
+                  onAddSlide={onAddSection}
+                  onDuplicateSlide={() => currentSection && onDuplicateSection(currentSection.id)}
+                  onMoveSlide={(dir) => currentSection && onMoveSection(currentSection.id, dir)}
+                  onDeleteSlide={() => currentSection && onDeleteSection(currentSection.id)}
+                />
+              ) : (
+                /* 4. DISTRACTION-FREE DOCUMENT SECTION EDITOR */
+                <div className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-xl p-5 sm:p-9 space-y-5 shadow-2xs">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-[11px] font-semibold uppercase tracking-wider text-[#2563EB]">
+                      Section {currentSectionIndex + 1} of {activeSections.length}
+                    </span>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-xs text-[#5B6472] tabular-nums mr-1">
+                        {editorText.trim().split(/\s+/).filter(Boolean).length} words · Autosaved
+                      </span>
+                      {currentSection && (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => onMoveSection(currentSection.id, -1)}
+                            disabled={currentSectionIndex <= 0}
+                            title="Move section up"
+                            className="p-1.5 rounded border border-[#E5E7EB] dark:border-slate-700 text-[#5B6472] hover:border-[#2563EB] disabled:opacity-35 cursor-pointer"
+                          >
+                            <ArrowUp size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onMoveSection(currentSection.id, 1)}
+                            disabled={currentSectionIndex >= activeSections.length - 1}
+                            title="Move section down"
+                            className="p-1.5 rounded border border-[#E5E7EB] dark:border-slate-700 text-[#5B6472] hover:border-[#2563EB] disabled:opacity-35 cursor-pointer"
+                          >
+                            <ArrowDown size={12} />
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => onDeleteSection(currentSection.id)}
+                            disabled={activeSections.length <= 1}
+                            title="Delete section"
+                            className="p-1.5 rounded border border-[#E5E7EB] dark:border-slate-700 text-[#5B6472] hover:text-red-600 hover:border-red-400 disabled:opacity-35 cursor-pointer"
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
-                ) : (
-                  /* Distraction-Free Document Section Editor */
+
                   <div className="space-y-4">
-                    <h2 className="text-lg sm:text-xl font-bold text-[#111827] dark:text-white leading-snug">
-                      {currentSection?.title || 'Section Editor'}
-                    </h2>
+                    <input
+                      type="text"
+                      aria-label="Section Heading"
+                      value={currentSection?.title || ''}
+                      onChange={(e) => currentSection && onSectionTitleChange(currentSection.id, e.target.value)}
+                      placeholder="Section heading..."
+                      style={{ fontFamily: docTemplate.fonts.headingCss }}
+                      className="w-full text-lg sm:text-xl font-bold text-[#111827] dark:text-white leading-snug bg-transparent border border-transparent hover:border-[#2563EB]/35 focus:border-dashed focus:border-[#2563EB] rounded px-1.5 py-1 outline-none"
+                    />
 
                     {/* Empty-state helper copy ONLY when section has no text yet */}
                     {!editorText.trim() && (
@@ -847,26 +1099,26 @@ export const StudioWorkspaceView: React.FC<StudioWorkspaceViewProps> = ({
                       )}
                     </div>
                   </div>
-                )}
 
-                {/* Section Visuals (if present) */}
-                {currentSection?.visuals && currentSection.visuals.length > 0 && (
-                  <div className="pt-5 border-t border-[#E5E7EB] dark:border-slate-800 space-y-3">
-                    <p className="text-[11px] font-semibold uppercase tracking-wider text-[#5B6472]">
-                      Visual Figures ({currentSection.visuals.length})
-                    </p>
-                    {currentSection.visuals.map((vis) => (
-                      <StudioVisualCard
-                        key={vis.id}
-                        block={vis}
-                        designStyle={doc.metadata?.visualPreferences?.designStyle}
-                        palette={activeVisualPalette}
-                        onRemove={() => onRemoveSectionVisual(currentSection.id, vis.id)}
-                      />
-                    ))}
-                  </div>
-                )}
-              </div>
+                  {/* Section Visuals (if present) */}
+                  {currentSection?.visuals && currentSection.visuals.length > 0 && (
+                    <div className="pt-5 border-t border-[#E5E7EB] dark:border-slate-800 space-y-3">
+                      <p className="text-[11px] font-semibold uppercase tracking-wider text-[#5B6472]">
+                        Visual Figures ({currentSection.visuals.length})
+                      </p>
+                      {currentSection.visuals.map((vis) => (
+                        <StudioVisualCard
+                          key={vis.id}
+                          block={vis}
+                          designStyle={doc.metadata?.visualPreferences?.designStyle}
+                          palette={activeVisualPalette}
+                          onRemove={() => onRemoveSectionVisual(currentSection.id, vis.id)}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
             </div>
           )}
         </div>

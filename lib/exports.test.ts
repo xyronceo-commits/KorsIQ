@@ -108,9 +108,9 @@ async function readPdfHeader(blob: Blob): Promise<string> {
 }
 
 describe('Template Registries & Defensive Resolution', () => {
-  it('exposes exactly 5 document templates and 6 slide templates with required defaults', () => {
+  it('exposes exactly 5 document templates and 14 slide templates (6 classic + 8 blank vector) with required defaults', () => {
     assert.equal(DOCUMENT_TEMPLATES.length, 5);
-    assert.equal(SLIDE_TEMPLATES.length, 6);
+    assert.equal(SLIDE_TEMPLATES.length, 14);
     assert.equal(DEFAULT_DOCUMENT_TEMPLATE_ID, 'university-standard');
     assert.equal(DEFAULT_SLIDE_TEMPLATE_ID, 'academic-classic');
   });
@@ -148,6 +148,14 @@ describe('Template Registries & Defensive Resolution', () => {
       'seminar-editorial': 4,
       'modern-pitch': 5,
       'executive-dark': 4,
+      'diagonal-slash': 4,
+      'warm-geometric-arcs': 4,
+      'swiss-monochrome': 4,
+      'corporate-slant': 4,
+      'architectural-frame': 4,
+      'blue-wave-flow': 4,
+      'editorial-split-dark': 4,
+      'executive-concentric': 4,
     });
   });
 
@@ -324,7 +332,72 @@ describe('Academic Studio Document Exports (.docx & .pdf across all 5 templates)
   });
 });
 
-describe('Academic Studio Slide Exports (.pptx & 16:9 .pdf across all 6 templates)', () => {
+describe('8 Blank Vector Slide Templates (Native PPTX Shapes, Palette Recoloring & Safe Zones)', () => {
+  const VECTOR_IDS: SlideTemplateId[] = [
+    'diagonal-slash',
+    'warm-geometric-arcs',
+    'swiss-monochrome',
+    'corporate-slant',
+    'architectural-frame',
+    'blue-wave-flow',
+    'editorial-split-dark',
+    'executive-concentric',
+  ];
+
+  it('defines explicit non-overlapping safeZone bounds for all 8 blank vector templates', () => {
+    for (const id of VECTOR_IDS) {
+      const tpl = resolveSlideTemplate(id);
+      assert.equal(tpl.vectorKind, id);
+      assert.ok(tpl.safeZone, `Missing safeZone for ${id}`);
+      const { title, content } = tpl.safeZone!;
+      for (const box of [title, content]) {
+        assert.ok(box.x >= 0.4 && box.y >= 0.4, `Safe zone margin too tight for ${id}`);
+        assert.ok(box.x + box.w <= 13.0, `Safe zone overflows right edge for ${id}`);
+        assert.ok(box.y + box.h <= 7.1, `Safe zone overflows bottom edge for ${id}`);
+      }
+    }
+    // Specific decorative clearance assertions
+    assert.ok(resolveSlideTemplate('diagonal-slash').safeZone!.content.x >= 2.7);
+    assert.ok(resolveSlideTemplate('executive-concentric').safeZone!.content.x + resolveSlideTemplate('executive-concentric').safeZone!.content.w <= 10.7);
+    assert.ok(resolveSlideTemplate('executive-concentric').safeZone!.content.y + resolveSlideTemplate('executive-concentric').safeZone!.content.h <= 6.0);
+  });
+
+  it('renders native PPTX vector shapes and recolors immediately via curated palettes', async () => {
+    for (const id of VECTOR_IDS) {
+      const baseTpl = resolveSlideTemplate(id);
+      const altPalette = baseTpl.palettes[1];
+      const deck = buildSampleDoc(2, 1, {
+        docType: 'presentation',
+        fileFormat: 'pptx',
+        metadata: {
+          slideTemplateId: id,
+          slidePaletteId: altPalette.id,
+        },
+      });
+      const resolved = resolveSlideTemplate(id, altPalette.id);
+      const pptxBlob = await generatePptxBlob(deck);
+      assert.ok(pptxBlob.size > 3500, `Vector PPTX too small for ${id}`);
+      const zip = await JSZip.loadAsync(await pptxBlob.arrayBuffer());
+      const slide1Xml = await zip.file('ppt/slides/slide1.xml')?.async('string');
+      const slide2Xml = await zip.file('ppt/slides/slide2.xml')?.async('string');
+      assert.ok(
+        slide1Xml && (slide1Xml.includes('<a:prstGeom') || slide1Xml.includes('<a:custGeom')),
+        `Expected native PPTX vector geometry on slide 1 for ${id}`
+      );
+      assert.ok(
+        slide2Xml && (slide2Xml.includes('<a:prstGeom') || slide2Xml.includes('<a:custGeom')),
+        `Expected native PPTX vector geometry on slide 2 for ${id}`
+      );
+      const expectedHex = resolved.colors.accent.replace('#', '').toUpperCase();
+      assert.ok(
+        slide1Xml.includes(expectedHex) || slide2Xml.includes(expectedHex),
+        `Expected recolored palette accent ${expectedHex} in PPTX XML for ${id} (${altPalette.id})`
+      );
+    }
+  });
+});
+
+describe('Academic Studio Slide Exports (.pptx & 16:9 .pdf across all 14 templates)', () => {
   for (const tpl of SLIDE_TEMPLATES) {
     it(`exports valid .pptx and 16:9 landscape .pdf for slide template "${tpl.id}"`, async () => {
       const deck = buildSampleDoc(3, 1, {
@@ -368,6 +441,128 @@ describe('Academic Studio Slide Exports (.pptx & 16:9 .pdf across all 6 template
       assert.equal(await readPdfHeader(pdfBlob), '%PDF-');
     });
   }
+});
+
+describe('Full Cover-to-End Inline Edit Parity (.docx, .pdf & .pptx)', () => {
+  it('exports edited coverPage fields and respects includeCoverPage: false in .docx and .pdf', async () => {
+    const editedDoc = buildSampleDoc(2, 1, {
+      metadata: {
+        documentTemplateId: 'academic-clean',
+        coverPage: {
+          title: 'Custom Edited Thesis Title',
+          subtitle: 'Final Year Dissertation',
+          studentName: 'Chidi Okonkwo',
+          studentId: 'MAT/2026/0091',
+          courseCode: 'EEE 502',
+          courseTitle: 'Smart Grid Systems',
+          department: 'Electrical Engineering',
+          faculty: 'Faculty of Engineering',
+          institution: 'University of Ibadan',
+          supervisorName: 'Prof. A. Balogun',
+          submissionDate: 'November 2026',
+          includeCoverPage: true,
+        },
+      },
+    });
+
+    const docxZip = await JSZip.loadAsync(await (await generateDocxBlob(editedDoc)).arrayBuffer());
+    const docXml = await docxZip.file('word/document.xml')?.async('string');
+    assert.ok(docXml && docXml.includes('Custom Edited Thesis Title'));
+    assert.ok(docXml.includes('Chidi Okonkwo'));
+    assert.ok(docXml.includes('MAT/2026/0091'));
+    assert.ok(docXml.includes('Prof. A. Balogun'));
+    assert.ok(docXml.includes('November 2026'));
+
+    const pdfWithCover = generatePdfDoc(editedDoc);
+    const pdfWithoutCover = generatePdfDoc({
+      ...editedDoc,
+      metadata: {
+        ...editedDoc.metadata,
+        includeCoverPage: false,
+        coverPage: { ...editedDoc.metadata!.coverPage!, includeCoverPage: false },
+      },
+    });
+    assert.ok(
+      pdfWithoutCover.getNumberOfPages() < pdfWithCover.getNumberOfPages(),
+      'Expected includeCoverPage: false to omit the cover page in PDF'
+    );
+
+    const noCoverDocxZip = await JSZip.loadAsync(
+      await (
+        await generateDocxBlob({
+          ...editedDoc,
+          metadata: {
+            ...editedDoc.metadata,
+            includeCoverPage: false,
+            coverPage: { ...editedDoc.metadata!.coverPage!, includeCoverPage: false },
+          },
+        })
+      ).arrayBuffer()
+    );
+    const noCoverXml = await noCoverDocxZip.file('word/document.xml')?.async('string');
+    assert.ok(noCoverXml && !noCoverXml.includes('Prof. A. Balogun'), 'Expected cover supervisor omitted when includeCoverPage is false');
+  });
+
+  it('exports edited Slide 1 cover metadata, cover speaker notes, middle slide edits, takeaway strip, and added slides in .pptx', async () => {
+    const editedDeck = buildSampleDoc(2, 1, {
+      docType: 'presentation',
+      fileFormat: 'pptx',
+      metadata: {
+        slideTemplateId: 'executive-concentric',
+        slidePaletteId: 'navy-alabaster',
+        coverPage: {
+          title: 'Campus Microgrid Defense Deck',
+          subtitle: 'Hybrid Solar + Battery Reliability',
+          studentName: 'Ngozi Eze',
+          studentId: '2022/ENG/114',
+          courseCode: 'EEE 410',
+          institution: 'UNILAG',
+          submissionDate: 'Nov 2026',
+          speakerNotes: 'Welcome panel members and introduce the problem.',
+        },
+      },
+    });
+    editedDeck.sections[0].title = 'Updated Slide 2 Heading';
+    editedDeck.sections[0].content = '- Edited bullet alpha\n- Edited bullet beta';
+    editedDeck.sections[0].takeaway = 'Key Takeaway: 99.1% uptime achieved.';
+    editedDeck.sections.push({
+      id: 'sec_added_final',
+      outlineItemId: 'out_added_final',
+      title: 'Thank You & Q&A',
+      level: 1,
+      order: 3,
+      content: '- Questions welcome from the committee',
+      wordCount: 6,
+      citations: [],
+      status: 'drafted',
+      lastEditedAt: new Date().toISOString(),
+    });
+    editedDeck.contentBlocks = [
+      {
+        id: 'blk_s1',
+        sectionId: 'sec_1',
+        type: 'slide',
+        title: 'Updated Slide 2 Heading',
+        bullets: ['Edited bullet alpha', 'Edited bullet beta'],
+        speakerNotes: 'Highlight the battery sizing curve here.',
+      },
+    ];
+
+    const pptxZip = await JSZip.loadAsync(await (await generatePptxBlob(editedDeck)).arrayBuffer());
+    const slide1Xml = await pptxZip.file('ppt/slides/slide1.xml')?.async('string');
+    const slide2Xml = await pptxZip.file('ppt/slides/slide2.xml')?.async('string');
+    const slide4Xml = await pptxZip.file('ppt/slides/slide4.xml')?.async('string');
+    assert.ok(slide1Xml && slide1Xml.includes('Campus Microgrid Defense Deck'));
+    assert.ok(slide1Xml.includes('Ngozi Eze'));
+    assert.ok(slide1Xml.includes('2022/ENG/114'));
+    assert.ok(slide2Xml && slide2Xml.includes('Updated Slide 2 Heading'));
+    assert.ok(slide2Xml.includes('Edited bullet alpha'));
+    assert.ok(slide2Xml.includes('Key Takeaway: 99.1% uptime achieved.'));
+    assert.ok(slide4Xml && slide4Xml.includes('Thank You'));
+
+    const notes1Xml = await pptxZip.file('ppt/notesSlides/notesSlide1.xml')?.async('string');
+    assert.ok(notes1Xml && notes1Xml.includes('Welcome panel members'), 'Expected Slide 1 cover speaker notes in PPTX');
+  });
 });
 
 describe('Defensive Export Fallbacks (missing / null / unknown template IDs)', () => {
