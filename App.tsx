@@ -7,14 +7,14 @@ import Dashboard from './components/Dashboard';
 import { UserAvatar } from './components/UserAvatar';
 import Auth, { type AuthMode } from './components/Auth';
 import type { Session } from '@supabase/supabase-js';
-import { supabase, toAuthUser, setCurrentUserId, getAccessToken, type AuthUser } from './lib/supabase';
+import { supabase, toAuthUser, setCurrentUserId, getAccessToken, hasStoredSupabaseSession, type AuthUser } from './lib/supabase';
 import { DBService } from './services/db';
 import { cleanupLegacyApiKeyStorage, GeminiService } from './services/gemini';
 import { applyPageSeo, CANONICAL_ORIGIN, PUBLIC_HOME_SEO } from './lib/seo';
 import KorsIQLogo from './components/KorsIQLogo';
+import LandingPage from './components/LandingPage';
 
 const Onboarding = lazy(() => import('./components/Onboarding'));
-const LandingPage = lazy(() => import('./components/LandingPage'));
 const CourseManager = lazy(() => import('./components/CourseManager'));
 const ScheduleView = lazy(() => import('./components/ScheduleView'));
 const StudyHub = lazy(() => import('./components/StudyHub'));
@@ -133,12 +133,16 @@ const App: React.FC = () => {
   });
 
   useEffect(() => {
-    if (isDarkMode) {
-      document.documentElement.classList.add('dark');
-      localStorage.setItem('scolaris_theme', 'dark');
-    } else {
-      document.documentElement.classList.remove('dark');
-      localStorage.setItem('scolaris_theme', 'light');
+    try {
+      if (isDarkMode) {
+        document.documentElement.classList.add('dark');
+        localStorage.setItem('scolaris_theme', 'dark');
+      } else {
+        document.documentElement.classList.remove('dark');
+        localStorage.setItem('scolaris_theme', 'light');
+      }
+    } catch {
+      // Storage unavailable (e.g. restricted crawler or private browsing)
     }
   }, [isDarkMode]);
 
@@ -149,8 +153,8 @@ const App: React.FC = () => {
     cleanupLegacyApiKeyStorage();
   }, []);
   
-  // Auth State Management
-  const [authLoading, setAuthLoading] = useState(true);
+  // Auth State Management — start unblocked on public `/` when no stored session exists
+  const [authLoading, setAuthLoading] = useState<boolean>(() => hasStoredSupabaseSession());
   const [authUser, setAuthUser] = useState<AuthUser | null>(null);
   const [showAuth, setShowAuth] = useState(false);
   const [authMode, setAuthMode] = useState<AuthMode>('signin');
@@ -529,31 +533,56 @@ const App: React.FC = () => {
       if (!cancelled) setAuthLoading(false);
     };
 
-    const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
-      if (event === 'PASSWORD_RECOVERY') {
-        setIsPasswordRecovery(true);
-        setShowAuth(true);
-      }
-      // Defer: calling Supabase APIs synchronously inside this callback can deadlock the client
-      setTimeout(() => { if (!cancelled) applySession(session); }, 0);
-    });
+    let unsubscribe: (() => void) | null = null;
+    const fallbackTimer = window.setTimeout(() => {
+      if (!cancelled) setAuthLoading(false);
+    }, 4000);
+
+    try {
+      const { data: sub } = supabase.auth.onAuthStateChange((event, session) => {
+        if (event === 'PASSWORD_RECOVERY') {
+          setIsPasswordRecovery(true);
+          setShowAuth(true);
+        }
+        // Defer: calling Supabase APIs synchronously inside this callback can deadlock the client
+        setTimeout(() => {
+          if (!cancelled) {
+            applySession(session).catch(() => {
+              if (!cancelled) setAuthLoading(false);
+            });
+          }
+        }, 0);
+      });
+      unsubscribe = () => sub.subscription.unsubscribe();
+    } catch (err) {
+      console.warn('Supabase auth observer unavailable:', err);
+      setAuthLoading(false);
+    }
 
     return () => {
       cancelled = true;
-      sub.subscription.unsubscribe();
+      window.clearTimeout(fallbackTimer);
+      try {
+        unsubscribe?.();
+      } catch {}
     };
   }, []);
 
-  // DB Connection Health Checker (visibility-aware + instant browser online/offline)
+  // DB Connection Health Checker (authenticated workspace only — zero background Supabase calls on public `/`)
   useEffect(() => {
+    if (!authUser) return;
     const checkDb = async () => {
       if (typeof navigator !== 'undefined' && !navigator.onLine) {
         setDbConnected(false);
         return;
       }
       if (typeof document !== 'undefined' && document.visibilityState === 'hidden') return;
-      const isConnected = await DBService.checkConnection();
-      setDbConnected(isConnected);
+      try {
+        const isConnected = await DBService.checkConnection();
+        setDbConnected(isConnected);
+      } catch {
+        setDbConnected(false);
+      }
     };
     const handleOnline = () => { checkDb(); };
     const handleOffline = () => { setDbConnected(false); };
@@ -566,7 +595,7 @@ const App: React.FC = () => {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, []);
+  }, [authUser]);
 
   // Sync state changes to DB (skip hydration writes on startup)
   useEffect(() => {
@@ -625,14 +654,19 @@ const App: React.FC = () => {
       
       todaySessions.forEach(session => {
         const lastNotifiedKey = `last_notified_session_${session.id}`;
-        const lastNotified = localStorage.getItem(lastNotifiedKey);
+        let lastNotified: string | null = null;
+        try {
+          lastNotified = localStorage.getItem(lastNotifiedKey);
+        } catch {}
         
         if (!lastNotified || (Date.now() - parseInt(lastNotified, 10)) > 86400000) {
           const course = courses.find(c => c.id === session.courseId);
           const topicInfo = session.topic ? ` Today's focus: ${session.topic}.` : '';
           const techniqueInfo = session.technique ? ` Recommended technique: ${session.technique}.` : '';
           addNotification('session', 'Upcoming Study Session', `Your ${session.mode} session for ${course?.code || 'your course'} is scheduled today.${topicInfo}${techniqueInfo}`, 'schedule');
-          localStorage.setItem(lastNotifiedKey, Date.now().toString());
+          try {
+            localStorage.setItem(lastNotifiedKey, Date.now().toString());
+          } catch {}
 
           // Trigger native browser notification if permitted
           if (typeof window !== 'undefined' && 'Notification' in window && Notification.permission === 'granted' && profile.notifications?.browserPush !== false) {
@@ -831,13 +865,17 @@ const App: React.FC = () => {
       console.warn('Notification permission error:', err);
     } finally {
       setShowNotifPermissionBanner(false);
-      localStorage.setItem('korsiq_notif_prompt_dismissed', 'true');
+      try {
+        localStorage.setItem('korsiq_notif_prompt_dismissed', 'true');
+      } catch {}
     }
   };
 
   const handleDismissNotifBanner = () => {
     setShowNotifPermissionBanner(false);
-    localStorage.setItem('korsiq_notif_prompt_dismissed', 'true');
+    try {
+      localStorage.setItem('korsiq_notif_prompt_dismissed', 'true');
+    } catch {}
   };
 
   const unreadCount = notifications.filter(n => !n.read).length;

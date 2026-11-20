@@ -13,6 +13,7 @@ import {
   resolveDocumentTemplate,
   resolveSlideTemplate,
 } from '../lib/studioTemplates';
+import SlideVectorBackground from './SlideVectorBackground';
 
 export type TemplatePickerMode = 'document' | 'slide';
 
@@ -372,9 +373,52 @@ export const DocumentTemplateThumbnail: React.FC<{
 export const SlideTemplateThumbnail: React.FC<{
   template: SlideTemplate;
   sample?: TemplatePreviewSample;
-}> = ({ template, sample }) => {
+  blankCanvas?: boolean;
+}> = ({ template, sample, blankCanvas = false }) => {
   const s = getSafeSample(sample);
   const { colors, fonts, layout } = template;
+
+  if (template.vectorKind && template.safeZone) {
+    const zone = template.safeZone.title;
+    const isDarkTitle = template.vectorKind === 'editorial-split-dark';
+    const titleColor = isDarkTitle ? colors.titleText : colors.heading;
+    const subColor = isDarkTitle ? colors.accentSoft || '#E2E8F0' : colors.muted;
+    const isCentered = template.vectorKind === 'swiss-monochrome';
+    return (
+      <div
+        className="w-full aspect-video rounded border overflow-hidden select-none relative text-left"
+        style={{ backgroundColor: colors.bg, borderColor: colors.border, fontFamily: fonts.bodyCss }}
+      >
+        <SlideVectorBackground template={template} variant="title" />
+        {!blankCanvas && (
+          <div
+            className={`absolute z-10 flex flex-col justify-center gap-1 ${
+              isCentered ? 'items-center text-center' : 'text-left'
+            }`}
+            style={{
+              left: `${(zone.x / 13.333) * 100}%`,
+              top: `${(zone.y / 7.5) * 100}%`,
+              width: `${(zone.w / 13.333) * 100}%`,
+              height: `${(zone.h / 7.5) * 100}%`,
+            }}
+          >
+            <div className="text-[6px] font-bold uppercase tracking-wider truncate" style={{ color: colors.accent }}>
+              {s.courseCode}
+            </div>
+            <div
+              className="text-[9.5px] font-bold leading-tight line-clamp-2"
+              style={{ color: titleColor, fontFamily: fonts.headingCss }}
+            >
+              {s.title}
+            </div>
+            <div className="text-[6px] truncate" style={{ color: subColor }}>
+              {s.studentName}
+            </div>
+          </div>
+        )}
+      </div>
+    );
+  }
 
   if (layout.titleLayout === 'pitch_split_hero') {
     return (
@@ -840,9 +884,75 @@ const DocumentFullPreview: React.FC<{
 const SlideFullPreview: React.FC<{
   template: SlideTemplate;
   sample?: TemplatePreviewSample;
-}> = ({ template, sample }) => {
+  blankCanvas?: boolean;
+}> = ({ template, sample, blankCanvas = false }) => {
   const s = getSafeSample(sample);
   const { colors, fonts, layout } = template;
+
+  if (template.vectorKind && template.safeZone) {
+    const contentZone = template.safeZone.content;
+    return (
+      <div className="space-y-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-semibold text-[#5B6472] dark:text-slate-400 uppercase tracking-wider">
+              Slide 1 — Title Canvas {blankCanvas ? '(Blank Vector)' : '(With Sample Text)'}
+            </p>
+            <SlideTemplateThumbnail template={template} sample={sample} blankCanvas={blankCanvas} />
+          </div>
+          <div className="space-y-1.5">
+            <p className="text-[11px] font-semibold text-[#5B6472] dark:text-slate-400 uppercase tracking-wider">
+              Slide 2 — Content Canvas {blankCanvas ? '(Blank Vector)' : '(Safe Content Zone)'}
+            </p>
+            <div
+              className="w-full aspect-video rounded border overflow-hidden select-none relative text-left"
+              style={{ backgroundColor: colors.bg, borderColor: colors.border, fontFamily: fonts.bodyCss }}
+            >
+              <SlideVectorBackground template={template} variant="content" />
+              {!blankCanvas && (
+                <div
+                  className="absolute z-10 flex flex-col justify-start gap-1.5"
+                  style={{
+                    left: `${(contentZone.x / 13.333) * 100}%`,
+                    top: `${(contentZone.y / 7.5) * 100}%`,
+                    width: `${(contentZone.w / 13.333) * 100}%`,
+                    height: `${(contentZone.h / 7.5) * 100}%`,
+                  }}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className="text-[9.5px] font-bold truncate"
+                      style={{ color: colors.heading, fontFamily: fonts.headingCss }}
+                    >
+                      Core Research Objectives
+                    </span>
+                    <span className="text-[6.5px] font-mono" style={{ color: colors.muted }}>
+                      02
+                    </span>
+                  </div>
+                  <ul className="space-y-1 text-[7.5px] leading-snug">
+                    {[
+                      'Evaluate hybrid solar-storage dispatch under peak load.',
+                      'Quantify outage reduction across academic buildings.',
+                      'Compare lifecycle cost against diesel backup generation.',
+                    ].map((b, i) => (
+                      <li key={i} className="flex items-start gap-1.5">
+                        <span
+                          className="w-1.5 h-1.5 rounded-xs shrink-0 mt-1"
+                          style={{ backgroundColor: colors.accent }}
+                        />
+                        <span className="line-clamp-1" style={{ color: colors.body }}>{b}</span>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="space-y-4">
@@ -972,6 +1082,7 @@ export const StudioTemplateModal: React.FC<StudioTemplateModalProps> = ({
   titleLabel,
 }) => {
   const [activeId, setActiveId] = useState<string>(initialTemplateId);
+  const [showSampleText, setShowSampleText] = useState<boolean>(false);
   const [activePaletteId, setActivePaletteId] = useState<string>(
     initialPaletteId ||
       (mode === 'document'
@@ -1077,13 +1188,24 @@ export const StudioTemplateModal: React.FC<StudioTemplateModalProps> = ({
                 {activeMeta.tagline} · Best for: {activeMeta.bestFor}
               </p>
             </div>
-            <div className="flex flex-col sm:items-end gap-1">
-              <PaletteSwatchRow
-                palettes={activeMeta.palettes}
-                activePaletteId={activeMeta.activePaletteId}
-                onSelectPalette={setActivePaletteId}
-                size="md"
-              />
+            <div className="flex flex-col sm:items-end gap-1.5">
+              <div className="flex flex-wrap items-center gap-2">
+                {!isDoc && activeSlideTpl?.vectorKind && (
+                  <button
+                    type="button"
+                    onClick={() => setShowSampleText((prev) => !prev)}
+                    className="px-2.5 py-1 rounded-md border border-[#E5E7EB] dark:border-slate-700 bg-white dark:bg-slate-800 text-[11px] font-medium text-[#111827] dark:text-slate-200 hover:border-[#2563EB] cursor-pointer"
+                  >
+                    {showSampleText ? 'Show Blank Canvas' : 'Show Sample Text'}
+                  </button>
+                )}
+                <PaletteSwatchRow
+                  palettes={activeMeta.palettes}
+                  activePaletteId={activeMeta.activePaletteId}
+                  onSelectPalette={setActivePaletteId}
+                  size="md"
+                />
+              </div>
               <span className="text-[11px] font-mono text-[#5B6472] dark:text-slate-400">
                 {isDoc
                   ? `${activeDocTpl!.fonts.body} ${activeDocTpl!.sizes.bodyPt}pt · ${activeDocTpl!.lineSpacing}x`
@@ -1095,7 +1217,11 @@ export const StudioTemplateModal: React.FC<StudioTemplateModalProps> = ({
           {isDoc ? (
             <DocumentFullPreview template={activeDocTpl!} sample={sample} />
           ) : (
-            <SlideFullPreview template={activeSlideTpl!} sample={sample} />
+            <SlideFullPreview
+              template={activeSlideTpl!}
+              sample={sample}
+              blankCanvas={Boolean(activeSlideTpl?.vectorKind) && !showSampleText}
+            />
           )}
         </div>
 
@@ -1148,6 +1274,7 @@ export const StudioTemplatePicker: React.FC<StudioTemplatePickerProps> = ({
   compact = false,
 }) => {
   const [categoryFilter, setCategoryFilter] = useState<'all' | TemplateCategory>('all');
+  const [showSampleOnVectorCards, setShowSampleOnVectorCards] = useState<boolean>(false);
   const [previewTemplateId, setPreviewTemplateId] = useState<DocumentTemplateId | SlideTemplateId | null>(null);
 
   const isDoc = mode === 'document';
@@ -1187,6 +1314,16 @@ export const StudioTemplatePicker: React.FC<StudioTemplatePickerProps> = ({
         </div>
 
         <div className="flex items-center gap-1.5 flex-wrap" role="tablist" aria-label="Template category filter">
+          {!isDoc && (
+            <button
+              type="button"
+              onClick={() => setShowSampleOnVectorCards((prev) => !prev)}
+              data-toggle-blank-canvas="true"
+              className="px-2.5 py-1.5 rounded-lg text-xs font-medium border border-[#E5E7EB] dark:border-slate-700 bg-white dark:bg-slate-800 text-[#111827] dark:text-slate-200 hover:border-[#2563EB] transition-colors min-h-[36px] cursor-pointer"
+            >
+              {showSampleOnVectorCards ? 'Blank Canvas' : 'Sample Text'}
+            </button>
+          )}
           {[
             { id: 'all' as const, label: `All (${totalCount})` },
             { id: 'minimal' as const, label: 'Minimal & Academic' },
@@ -1340,7 +1477,11 @@ export const StudioTemplatePicker: React.FC<StudioTemplatePickerProps> = ({
                 >
                   <div className="space-y-2.5">
                     <div className="relative">
-                      <SlideTemplateThumbnail template={resolvedTpl} sample={sample} />
+                      <SlideTemplateThumbnail
+                        template={resolvedTpl}
+                        sample={sample}
+                        blankCanvas={Boolean(resolvedTpl.vectorKind) && !showSampleOnVectorCards}
+                      />
                       {selected && (
                         <span className="absolute top-2 right-2 inline-flex items-center gap-1 px-2 py-0.5 rounded bg-[#2563EB] text-white text-[10px] font-semibold">
                           <Check size={11} />

@@ -2,6 +2,7 @@ import JSZip from 'jszip';
 import { AcademicDocument } from '../types';
 import { renderVisualBlockToPng } from './visualRenderer';
 import { formatReferenceEntry, inferSectionKind, STUDIO_DOWNLOAD_NOTICE } from '../lib/studioV2';
+import { resolveDocumentCoverPage } from '../lib/studioCover';
 import {
   DocumentTemplate,
   documentTemplateToVisualPalette,
@@ -547,18 +548,17 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
 
   // 3. Header & Footer XML
   const meta = doc.metadata || {};
-  const brief = doc.brief;
-  const institution = brief?.institution || meta.institution || 'INSTITUTION OF HIGHER LEARNING';
-  const faculty = brief?.faculty || brief?.department || meta.faculty || meta.department || 'FACULTY OF ACADEMIC STUDIES';
-  const studentName = brief?.studentName || meta.studentName || 'STUDENT RESEARCHER';
-  const studentId = brief?.matricNumber || meta.studentId || '';
-  const courseCode = brief?.courseCode || meta.courseCode || doc.subject || '';
-  const courseTitle = brief?.courseTitle || meta.courseTitle || doc.title || '';
-  const lecturerName = brief?.supervisorName || meta.lecturerName || '';
-  const submissionDate =
-    brief?.date ||
-    meta.submissionDate ||
-    new Date().toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+  const cover = resolveDocumentCoverPage(doc);
+  const coverTitle = cover.title || doc.title || '';
+  const institution = cover.institution;
+  const faculty = [cover.department, cover.faculty].filter(Boolean).join(' · ');
+  const studentName = cover.studentName;
+  const studentId = cover.studentId;
+  const courseCode = cover.courseCode;
+  const courseTitle = cover.courseTitle;
+  const lecturerName = cover.supervisorName;
+  const submissionDate = cover.submissionDate;
+  const docForCover: AcademicDocument = coverTitle && coverTitle !== doc.title ? { ...doc, title: coverTitle } : doc;
 
   const hasRunningHeader = tpl.layout.headerFooterStyle !== 'page_number_center';
   const headerXml = hasRunningHeader
@@ -605,14 +605,14 @@ export async function generateDocxBlob(doc: AcademicDocument): Promise<Blob> {
   let bodyXml = '';
 
   // COVER / TITLE PAGE
-  if (meta.includeCoverPage !== false) {
-    bodyXml += buildCoverXml(doc, tpl, contentWidthTwips, {
+  if (cover.includeCoverPage) {
+    bodyXml += buildCoverXml(docForCover, tpl, contentWidthTwips, {
       institution,
       faculty,
       studentName,
       studentId,
       courseCode,
-      courseTitle,
+      courseTitle: courseTitle || cover.subtitle,
       lecturerName,
       submissionDate,
     });

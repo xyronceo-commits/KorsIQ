@@ -12,12 +12,17 @@ import {
   isBetaLimitedStudioUser,
   isJobLeaseExpired,
   isStudioKillSwitchEnabled,
+  pagesToTargetWords,
+  parseStudioOutlineResponse,
   reconcileCitationsAndReferences,
+  resolveTargetPagesForDoc,
   selectStudioHomeStatusBar,
   sortAcademicSections,
   STUDIO_V2_LIMITS,
   validateStudioLimits,
   validateVisualBlock,
+  WORDS_PER_ACADEMIC_PAGE,
+  wordsToEstimatedPages,
 } from './studioV2';
 import {
   executeStudioJobStep,
@@ -812,7 +817,32 @@ async function runAsyncTests() {
     });
     assert.equal(completedShortWords.isComplete, true);
     assert.equal(completedShortWords.percent, 100);
-    assert.equal(completedShortWords.wordLabel, '4,626 words · Ready');
+    assert.equal(completedShortWords.wordLabel, '~14 pages · Ready');
+
+    const completedSlides = computeDocumentCardProgress({
+      status: 'completed',
+      docType: 'presentation',
+      fileFormat: 'pptx',
+      currentWordCount: 950,
+      targetWordCount: 1080,
+      sections: Array.from({ length: 9 }, (_, i) => ({
+        id: `sl${i + 1}`,
+        outlineItemId: `o${i + 1}`,
+        title: `Slide ${i + 2}`,
+        level: 1 as const,
+        order: i + 1,
+        content: 'Bullet point',
+        wordCount: 90,
+        citations: [],
+        status: 'drafted' as const,
+        lastEditedAt: '',
+      })),
+      outline: [],
+      metadata: { preferredFormat: 'pptx' },
+    });
+    assert.equal(completedSlides.isComplete, true);
+    assert.equal(completedSlides.percent, 100);
+    assert.equal(completedSlides.wordLabel, '10 slides · Ready');
 
     const exportedDoc = computeDocumentCardProgress({
       status: 'drafting',
@@ -897,6 +927,69 @@ async function runAsyncTests() {
     });
     assert.equal(active?.mode, 'active');
     assert.equal(active?.job.id, 'j4');
+  }
+
+  // 15. Page-to-word budget math & legacy targetWordCount fallback
+  {
+    assert.equal(WORDS_PER_ACADEMIC_PAGE, 325);
+    assert.equal(pagesToTargetWords(1), 325);
+    assert.equal(pagesToTargetWords(0), 325);
+    assert.equal(pagesToTargetWords(-5), 325);
+    assert.equal(pagesToTargetWords(10), 3250);
+    assert.equal(pagesToTargetWords(40), 13000);
+    assert.equal(pagesToTargetWords(99), 13000);
+
+    assert.equal(wordsToEstimatedPages(0), 1);
+    assert.equal(wordsToEstimatedPages(325), 1);
+    assert.equal(wordsToEstimatedPages(1625), 5);
+    assert.equal(wordsToEstimatedPages(3250), 10);
+
+    // Explicit targetPages on brief takes precedence
+    assert.equal(
+      resolveTargetPagesForDoc({
+        targetWordCount: 9000,
+        brief: { targetPages: 12, targetLength: 12, lengthUnit: 'pages' } as StudioBrief,
+        metadata: {},
+      }),
+      12
+    );
+
+    // Legacy document with only targetWordCount (no targetPages) derives pages seamlessly
+    assert.equal(
+      resolveTargetPagesForDoc({
+        targetWordCount: 3250,
+        metadata: {},
+      }),
+      10
+    );
+  }
+
+  // 16. Resilient outline JSON parsing (standard, markdown-fenced, top-level array, truncated error)
+  {
+    const standard = parseStudioOutlineResponse(
+      JSON.stringify({
+        outline: [
+          { id: 'sec_1', title: 'Cover Page', level: 1, order: 0, kind: 'cover', description: 'Title', targetWords: 0, plannedVisual: false },
+          { id: 'sec_2', title: 'Introduction', level: 1, order: 1, kind: 'body', description: 'Overview', targetWords: 450, plannedVisual: true },
+        ],
+      }),
+      true
+    );
+    assert.equal(standard.length, 2);
+    assert.equal(standard[1].plannedVisual, true);
+    assert.equal(standard[1].targetWords, 450);
+
+    const fencedArray = parseStudioOutlineResponse(
+      '```json\n[{"title":"Title Slide","kind":"slide","targetWords":40,"plannedVisual":false},{"title":"Key Findings","kind":"slide","targetWords":90,"plannedVisual":true}]\n```',
+      false
+    );
+    assert.equal(fencedArray.length, 2);
+    assert.equal(fencedArray[1].plannedVisual, false);
+
+    assert.throws(
+      () => parseStudioOutlineResponse('{"outline":[{"id":"sec_1","title":"Truncated', false),
+      /incomplete outline|truncated/i
+    );
   }
 
   console.log('All studioV2 tests passed!');

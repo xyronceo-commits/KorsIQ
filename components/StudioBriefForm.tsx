@@ -15,7 +15,17 @@ import {
 } from '../types';
 import { NIGERIAN_UNIVERSITIES } from '../utils/nigerianUniversities';
 import { GeminiService } from '../services/gemini';
-import { formatQuotaResetLabel, STUDIO_V2_LIMITS } from '../lib/studioV2';
+import {
+  clampAcademicPages,
+  clampSlideCount,
+  formatQuotaResetLabel,
+  MAX_ACADEMIC_PAGES,
+  MAX_SLIDES,
+  MIN_ACADEMIC_PAGES,
+  MIN_SLIDES,
+  pagesToTargetWords,
+  wordsToEstimatedPages,
+} from '../lib/studioV2';
 import {
   DEFAULT_SLIDE_TEMPLATE_ID,
   documentTemplateToLegacyStyle,
@@ -31,20 +41,24 @@ interface StudioBriefFormProps {
   initialBrief?: Partial<StudioBrief>;
   isSubmitting: boolean;
   weeklyQuota?: StudioWeeklyQuota | null;
+  externalError?: string | null;
   onCancel: () => void;
   onSubmit: (brief: StudioBrief) => void | Promise<void>;
 }
 
-const DOC_TYPES: Array<{ id: AcademicDocumentType; label: string; defaultLength: number; unit: StudioLengthUnit }> = [
-  { id: 'assignment', label: 'Assignment', defaultLength: 1500, unit: 'words' },
-  { id: 'report', label: 'Report', defaultLength: 2500, unit: 'words' },
-  { id: 'project', label: 'Project / Dissertation', defaultLength: 6000, unit: 'words' },
-  { id: 'term_paper', label: 'Term Paper', defaultLength: 3000, unit: 'words' },
-  { id: 'seminar_paper', label: 'Seminar Paper', defaultLength: 2500, unit: 'words' },
-  { id: 'lab_report', label: 'Lab Report', defaultLength: 1800, unit: 'words' },
-  { id: 'proposal', label: 'Proposal', defaultLength: 2500, unit: 'words' },
+const DOC_TYPES: Array<{ id: AcademicDocumentType; label: string; defaultLength: number; unit: 'pages' | 'slides' }> = [
+  { id: 'assignment', label: 'Assignment', defaultLength: 5, unit: 'pages' },
+  { id: 'report', label: 'Report', defaultLength: 8, unit: 'pages' },
+  { id: 'project', label: 'Project / Dissertation', defaultLength: 20, unit: 'pages' },
+  { id: 'term_paper', label: 'Term Paper', defaultLength: 10, unit: 'pages' },
+  { id: 'seminar_paper', label: 'Seminar Paper', defaultLength: 8, unit: 'pages' },
+  { id: 'lab_report', label: 'Lab Report', defaultLength: 6, unit: 'pages' },
+  { id: 'proposal', label: 'Proposal', defaultLength: 8, unit: 'pages' },
   { id: 'presentation', label: 'Presentation', defaultLength: 12, unit: 'slides' },
 ];
+
+const PAGE_PRESETS = [3, 5, 8, 10, 15, 20] as const;
+const SLIDE_PRESETS = [6, 8, 10, 12, 15, 20] as const;
 
 const CITATION_STYLES: CitationStyle[] = ['APA 7', 'Harvard', 'MLA', 'IEEE', 'Chicago', 'Vancouver'];
 
@@ -55,6 +69,7 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
   initialBrief,
   isSubmitting,
   weeklyQuota,
+  externalError,
   onCancel,
   onSubmit,
 }) => {
@@ -74,8 +89,24 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
   );
   const [instructions, setInstructions] = useState(initialBrief?.instructions || '');
   const [citationStyle, setCitationStyle] = useState<CitationStyle>(initialBrief?.citationStyle || 'APA 7');
-  const [targetLength, setTargetLength] = useState<number>(initialBrief?.targetLength || 1500);
-  const [lengthUnit, setLengthUnit] = useState<StudioLengthUnit>(initialBrief?.lengthUnit || 'words');
+  const initialIsSlides =
+    initialBrief?.fileFormat === 'pptx' || initialBrief?.docType === 'presentation';
+  const resolveInitialLength = (): number => {
+    if (initialIsSlides) {
+      return clampSlideCount(initialBrief?.targetLength || 12);
+    }
+    if (initialBrief?.targetPages && initialBrief.targetPages > 0) {
+      return clampAcademicPages(initialBrief.targetPages);
+    }
+    if (initialBrief?.lengthUnit === 'words' && initialBrief.targetLength) {
+      return clampAcademicPages(wordsToEstimatedPages(initialBrief.targetLength));
+    }
+    if (initialBrief?.targetLength && initialBrief.targetLength > 0) {
+      return clampAcademicPages(initialBrief.targetLength);
+    }
+    return 5;
+  };
+  const [targetLength, setTargetLength] = useState<number>(resolveInitialLength);
   const initialDocTemplate = resolveDocumentTemplate(
     initialBrief?.documentTemplateId,
     initialBrief?.documentPaletteId,
@@ -117,26 +148,23 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
     }
   }, [isSubmitting]);
 
+  useEffect(() => {
+    if (externalError) {
+      errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    }
+  }, [externalError]);
+
+  const displayedError = errorMsg || externalError || null;
+
   const effectiveSubmitting = isSubmitting || localSubmitting;
   const isSlideMode = fileFormat === 'pptx' || docType === 'presentation';
-
-  const handleLengthUnitChange = (nextUnit: StudioLengthUnit) => {
-    setLengthUnit(nextUnit);
-    if (nextUnit === 'pages' && targetLength > 100) {
-      setTargetLength(10);
-    } else if (nextUnit === 'slides' && targetLength > 100) {
-      setTargetLength(12);
-    } else if (nextUnit === 'words' && targetLength < 100) {
-      setTargetLength(1500);
-    }
-  };
+  const lengthUnit: StudioLengthUnit = isSlideMode ? 'slides' : 'pages';
 
   const handleDocTypeChange = (nextType: AcademicDocumentType) => {
     setDocType(nextType);
     const cfg = DOC_TYPES.find((d) => d.id === nextType);
     if (cfg) {
       setTargetLength(cfg.defaultLength);
-      setLengthUnit(cfg.unit);
       if (nextType === 'presentation') {
         setFileFormat('pptx');
       } else if (fileFormat === 'pptx') {
@@ -148,11 +176,10 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
   const handleFormatChange = (fmt: StudioFileFormat) => {
     setFileFormat(fmt);
     if (fmt === 'pptx') {
-      setLengthUnit('slides');
-      if (targetLength > 50) setTargetLength(12);
-    } else if (lengthUnit === 'slides') {
-      setLengthUnit('words');
-      setTargetLength(1500);
+      if (!isSlideMode) setTargetLength(12);
+    } else if (isSlideMode) {
+      const cfg = DOC_TYPES.find((d) => d.id === docType);
+      setTargetLength(cfg && cfg.unit === 'pages' ? cfg.defaultLength : 5);
     }
   };
 
@@ -207,13 +234,9 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
       errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
       return;
     }
-    const maxAllowed = lengthUnit === 'words' ? STUDIO_V2_LIMITS.maxTargetWords : 100;
-    const normalizedTarget = Math.min(maxAllowed, Math.max(1, Number(targetLength) || 1));
-    if (lengthUnit === 'words' && targetLength > STUDIO_V2_LIMITS.maxTargetWords) {
-      setErrorMsg(`Target length cannot exceed ${STUDIO_V2_LIMITS.maxTargetWords.toLocaleString()} words.`);
-      errorBannerRef.current?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-      return;
-    }
+    const normalizedTarget = isSlideMode
+      ? clampSlideCount(targetLength)
+      : clampAcademicPages(targetLength);
     setErrorMsg(null);
     submittingRef.current = true;
     setLocalSubmitting(true);
@@ -234,6 +257,8 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
         citationStyle,
         targetLength: normalizedTarget,
         lengthUnit,
+        targetPages: isSlideMode ? undefined : normalizedTarget,
+        targetWords: isSlideMode ? normalizedTarget * 90 : pagesToTargetWords(normalizedTarget),
         documentStyle: documentTemplateToLegacyStyle(documentTemplateId),
         documentTemplateId,
         documentPaletteId,
@@ -293,13 +318,14 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
         </button>
       </div>
 
-      {errorMsg && (
+      {displayedError && (
         <div
           ref={errorBannerRef}
           role="alert"
-          className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-lg text-xs font-medium"
+          data-studio-brief-error="true"
+          className="p-3 bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-900 text-rose-700 dark:text-rose-300 rounded-lg text-xs font-medium"
         >
-          {errorMsg}
+          {displayedError}
         </div>
       )}
 
@@ -522,7 +548,7 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
       <section className="bg-white dark:bg-slate-900 border border-[#E5E7EB] dark:border-slate-800 rounded-lg p-5 space-y-4">
         <h2 className="text-sm font-semibold text-[#111827] dark:text-white">Style & Citations</h2>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 items-start">
           <div>
             <label className="block text-xs font-medium text-[#111827] dark:text-slate-200 mb-1">Citation Style</label>
             <select
@@ -538,29 +564,67 @@ export const StudioBriefForm: React.FC<StudioBriefFormProps> = ({
             </select>
           </div>
 
-          <div>
-            <label className="block text-xs font-medium text-[#111827] dark:text-slate-200 mb-1">Target Length</label>
-            <input
-              type="number"
-              min={1}
-              max={lengthUnit === 'words' ? STUDIO_V2_LIMITS.maxTargetWords : 100}
-              value={targetLength}
-              onChange={(e) => setTargetLength(Math.max(1, Number(e.target.value) || 1))}
-              className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 rounded-lg text-sm min-h-[44px]"
-            />
-          </div>
+          <div className="sm:col-span-2" data-studio-length-picker={isSlideMode ? 'slides' : 'pages'}>
+            <div className="flex items-center justify-between gap-2 mb-1">
+              <label
+                htmlFor="studio-length-input"
+                className="block text-xs font-medium text-[#111827] dark:text-slate-200"
+              >
+                {isSlideMode ? 'Slides' : 'Pages'}
+              </label>
+              <span className="text-[11px] text-[#5B6472] dark:text-slate-400">
+                {isSlideMode
+                  ? `${MIN_SLIDES}–${MAX_SLIDES} slides`
+                  : 'Body pages (+ cover page & references)'}
+              </span>
+            </div>
 
-          <div>
-            <label className="block text-xs font-medium text-[#111827] dark:text-slate-200 mb-1">Length Unit</label>
-            <select
-              value={lengthUnit}
-              onChange={(e) => handleLengthUnitChange(e.target.value as StudioLengthUnit)}
-              className="w-full px-3 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 rounded-lg text-sm min-h-[44px]"
-            >
-              <option value="words">Words (max {STUDIO_V2_LIMITS.maxTargetWords.toLocaleString()})</option>
-              <option value="pages">Pages</option>
-              <option value="slides">Slides</option>
-            </select>
+            <div className="flex flex-wrap items-center gap-1.5">
+              {(isSlideMode ? SLIDE_PRESETS : PAGE_PRESETS).map((preset) => {
+                const active = targetLength === preset;
+                return (
+                  <button
+                    key={preset}
+                    type="button"
+                    data-length-preset={preset}
+                    onClick={() => setTargetLength(preset)}
+                    className={`px-3 py-2 rounded-lg text-xs font-medium border transition-colors min-h-[44px] min-w-[44px] tabular-nums cursor-pointer ${
+                      active
+                        ? 'bg-[#111827] text-white border-[#111827] dark:bg-white dark:text-[#111827] dark:border-white font-semibold'
+                        : 'bg-white dark:bg-slate-800 text-[#111827] dark:text-slate-200 border-[#E5E7EB] dark:border-slate-700 hover:border-[#2563EB]'
+                    }`}
+                  >
+                    {preset}
+                  </button>
+                );
+              })}
+
+              <div className="flex items-center gap-1.5 ml-auto sm:ml-1">
+                <input
+                  id="studio-length-input"
+                  data-studio-length-input="true"
+                  type="number"
+                  min={isSlideMode ? MIN_SLIDES : MIN_ACADEMIC_PAGES}
+                  max={isSlideMode ? MAX_SLIDES : MAX_ACADEMIC_PAGES}
+                  value={targetLength}
+                  onChange={(e) => {
+                    const parsed = Number(e.target.value);
+                    if (!Number.isFinite(parsed)) return;
+                    setTargetLength(Math.max(1, Math.round(parsed)));
+                  }}
+                  onBlur={() =>
+                    setTargetLength((prev) =>
+                      isSlideMode ? clampSlideCount(prev) : clampAcademicPages(prev)
+                    )
+                  }
+                  aria-label={isSlideMode ? 'Custom slide count' : 'Custom page count'}
+                  className="w-20 px-2.5 py-2 bg-white dark:bg-slate-800 border border-[#E5E7EB] dark:border-slate-700 rounded-lg text-sm text-center tabular-nums min-h-[44px]"
+                />
+                <span className="text-xs text-[#5B6472] dark:text-slate-400">
+                  {isSlideMode ? 'slides' : 'pages'}
+                </span>
+              </div>
+            </div>
           </div>
         </div>
 

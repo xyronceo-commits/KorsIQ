@@ -2,6 +2,7 @@ import { jsPDF } from 'jspdf';
 import { AcademicDocument } from '../types';
 import { renderVisualBlockToPng } from './visualRenderer';
 import { formatReferenceEntry, inferSectionKind, STUDIO_DOWNLOAD_NOTICE } from '../lib/studioV2';
+import { resolveDocumentCoverPage, resolveSlideCoverPage } from '../lib/studioCover';
 import {
   DocumentTemplate,
   SlideTemplate,
@@ -119,13 +120,25 @@ function renderSlideDeckPdf(doc: AcademicDocument, tpl: SlideTemplate): jsPDF {
   const borderRgb = hexToRgbTuple(tpl.colors.border, [203, 213, 225]);
   const visualPalette = slideTemplateToVisualPalette(tpl);
 
-  const brief = doc.brief;
   const meta = doc.metadata || {};
-  const courseCode = brief?.courseCode || meta.courseCode || doc.subject || '';
-  const studentName = brief?.studentName || meta.studentName || '';
-  const institution = brief?.institution || meta.institution || '';
-  const submissionDate = brief?.date || meta.submissionDate || '';
-  const subtitleText = [courseCode, studentName, institution, submissionDate].filter(Boolean).join('  •  ');
+  const slideCover = resolveSlideCoverPage(doc);
+  const effectiveSlideTitle = slideCover.title || doc.title;
+  const courseCode = slideCover.courseCode;
+  const studentName = slideCover.studentName;
+  const institution = slideCover.institution;
+  const submissionDate = slideCover.submissionDate;
+  const subtitleText = [
+    slideCover.subtitle,
+    courseCode,
+    studentName ? (slideCover.studentId ? `${studentName} (${slideCover.studentId})` : studentName) : '',
+    institution,
+    submissionDate,
+  ]
+    .filter(Boolean)
+    .join('  •  ');
+
+  const docTitleForSlide = effectiveSlideTitle;
+  const slideDoc: AcademicDocument = docTitleForSlide !== doc.title ? { ...doc, title: docTitleForSlide } : doc;
 
   let slideNum = 1;
 
@@ -208,7 +221,7 @@ function renderSlideDeckPdf(doc: AcademicDocument, tpl: SlideTemplate): jsPDF {
     pdf.setFont(tpl.fonts.pdfHeading, 'bold');
     pdf.setFontSize(26);
     pdf.setTextColor(...titleTextRgb);
-    const tLines = pdf.splitTextToSize(doc.title, slideW * 0.52) as string[];
+    const tLines = pdf.splitTextToSize(slideDoc.title, slideW * 0.52) as string[];
     pdf.text(tLines.slice(0, 4), 18, 62);
 
     if (subtitleText) {
@@ -665,19 +678,21 @@ function renderDocumentPdfPass(
     y += 3;
   };
 
-  const brief = doc.brief;
   const meta = doc.metadata || {};
-  const institution = brief?.institution || meta.institution;
-  const faculty = brief?.faculty || meta.faculty || brief?.department || meta.department;
-  const courseCode = brief?.courseCode || meta.courseCode;
-  const courseTitle = brief?.courseTitle || meta.courseTitle;
-  const studentName = brief?.studentName || meta.studentName;
-  const studentId = brief?.matricNumber || meta.studentId;
-  const supervisor = brief?.supervisorName || meta.lecturerName;
-  const submissionDate = brief?.date || meta.submissionDate;
+  const cover = resolveDocumentCoverPage(doc);
+  const coverTitle = cover.title || doc.title;
+  const institution = cover.institution || undefined;
+  const faculty = [cover.department, cover.faculty].filter(Boolean).join(' · ') || undefined;
+  const courseCode = cover.courseCode || undefined;
+  const courseTitle = cover.courseTitle || cover.subtitle || undefined;
+  const studentName = cover.studentName || undefined;
+  const studentId = cover.studentId || undefined;
+  const supervisor = cover.supervisorName || undefined;
+  const submissionDate = cover.submissionDate || undefined;
+  const docForCoverTitle = coverTitle;
 
   // 1. Cover Page
-  if (meta.includeCoverPage !== false) {
+  if (cover.includeCoverPage) {
     if (tpl.layout.coverStyle === 'executive_banner') {
       pdf.setFillColor(...coverBgRgb);
       pdf.rect(0, 0, pageWidth, 92, 'F');
@@ -691,7 +706,7 @@ function renderDocumentPdfPass(
 
       pdf.setFont(tpl.fonts.pdfHeading, 'bold');
       pdf.setFontSize(tpl.sizes.titlePt);
-      const tLines = pdf.splitTextToSize(doc.title, maxLineWidth) as string[];
+      const tLines = pdf.splitTextToSize(docForCoverTitle, maxLineWidth) as string[];
       pdf.text(tLines.slice(0, 4), marginLeft, 44);
 
       pdf.setFont(tpl.fonts.pdfBody, 'normal');
@@ -712,7 +727,7 @@ function renderDocumentPdfPass(
       }
     } else if (tpl.layout.coverStyle === 'technical_compact') {
       y = marginTop + 4;
-      writeHeading(doc.title, 1);
+      writeHeading(docForCoverTitle, 1);
       y += 2;
       const metaRows = [
         ['Document Type', doc.docType.replace('_', ' ').toUpperCase()],
@@ -735,7 +750,7 @@ function renderDocumentPdfPass(
           extraBottomMm: 3,
         });
       }
-      writeWrappedText(doc.title, tpl.sizes.titlePt, 'bold', {
+      writeWrappedText(docForCoverTitle, tpl.sizes.titlePt, 'bold', {
         font: tpl.fonts.pdfHeading,
         color: headingRgb,
         indentX: 8,
@@ -760,7 +775,7 @@ function renderDocumentPdfPass(
       if (faculty) {
         writeWrappedText(faculty, 10.5, 'normal', { color: mutedRgb, extraBottomMm: 16 });
       }
-      writeWrappedText(doc.title, tpl.sizes.titlePt, 'bold', {
+      writeWrappedText(docForCoverTitle, tpl.sizes.titlePt, 'bold', {
         font: tpl.fonts.pdfHeading,
         color: headingRgb,
         lineHeightMm: 9,

@@ -8,7 +8,9 @@ import {
   slideTemplateToVisualPalette,
 } from '../lib/studioTemplates';
 import { formatReferenceEntry } from '../lib/studioV2';
+import { resolveDocumentCoverPage, resolveSlideCoverPage } from '../lib/studioCover';
 import StudioVisualCard from './StudioVisualCard';
+import SlideVectorBackground from './SlideVectorBackground';
 
 export function getSectionAnchorId(sectionId: string): string {
   return `studio-preview-sec-${sectionId}`;
@@ -356,16 +358,16 @@ export const StudioDocumentPreview: React.FC<StudioDocumentPreviewProps> = ({
 }) => {
   const { colors, fonts, layout } = template;
   const visualPalette = useMemo(() => documentTemplateToVisualPalette(template), [template]);
-  const meta = doc.metadata || {};
-  const brief = doc.brief;
-  const institution = brief?.institution || meta.institution || '';
-  const faculty = brief?.faculty || brief?.department || meta.faculty || meta.department || '';
-  const courseCode = brief?.courseCode || meta.courseCode || doc.subject || '';
-  const courseTitle = brief?.courseTitle || meta.courseTitle || '';
-  const studentName = brief?.studentName || meta.studentName || '';
-  const studentId = brief?.matricNumber || meta.studentId || '';
-  const supervisor = brief?.supervisorName || meta.lecturerName || '';
-  const submissionDate = brief?.date || meta.submissionDate || '';
+  const cover = resolveDocumentCoverPage(doc);
+  const institution = cover.institution;
+  const faculty = [cover.department, cover.faculty].filter(Boolean).join(' · ');
+  const courseCode = cover.courseCode;
+  const courseTitle = cover.courseTitle;
+  const studentName = cover.studentName;
+  const studentId = cover.studentId;
+  const supervisor = cover.supervisorName;
+  const submissionDate = cover.submissionDate;
+  const displayTitle = cover.title || doc.title;
 
   return (
     <div
@@ -382,15 +384,25 @@ export const StudioDocumentPreview: React.FC<StudioDocumentPreviewProps> = ({
       }}
     >
       {/* Document Cover / Title Header styled by DocumentTemplate */}
-      {layout.coverStyle === 'executive_banner' ? (
+      {!cover.includeCoverPage ? null : layout.coverStyle === 'executive_banner' ? (
         <div
-          className="px-5 py-7 sm:px-10 sm:py-10 border-b-4"
+          id="studio-preview-cover"
+          className="px-5 py-7 sm:px-10 sm:py-10 border-b-4 relative group"
           style={{
             backgroundColor: colors.coverBg,
             color: colors.coverText,
             borderColor: colors.accent,
           }}
         >
+          {onSelectSectionForEdit && (
+            <button
+              type="button"
+              onClick={() => onSelectSectionForEdit('__cover_page__')}
+              className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity absolute top-3 right-3 px-2.5 py-1 rounded border border-white/30 bg-black/25 text-[11px] font-medium text-white cursor-pointer font-sans"
+            >
+              Edit cover
+            </button>
+          )}
           {(institution || courseCode) && (
             <p className="text-xs uppercase tracking-widest opacity-80 mb-2">
               {[institution, courseCode].filter(Boolean).join(' · ')}
@@ -400,8 +412,11 @@ export const StudioDocumentPreview: React.FC<StudioDocumentPreviewProps> = ({
             className="text-xl sm:text-2xl font-bold leading-snug"
             style={{ fontFamily: fonts.headingCss }}
           >
-            {doc.title}
+            {displayTitle}
           </h1>
+          {cover.subtitle && (
+            <p className="text-xs opacity-85 mt-1">{cover.subtitle}</p>
+          )}
           {(studentName || submissionDate || supervisor) && (
             <div className="mt-4 flex flex-wrap gap-x-5 gap-y-1 text-xs opacity-85">
               {studentName && (
@@ -417,9 +432,19 @@ export const StudioDocumentPreview: React.FC<StudioDocumentPreviewProps> = ({
         </div>
       ) : layout.coverStyle === 'editorial_left' ? (
         <div
-          className="px-5 pt-7 pb-6 sm:px-10 sm:pt-12 sm:pb-8 border-b"
+          id="studio-preview-cover"
+          className="px-5 pt-7 pb-6 sm:px-10 sm:pt-12 sm:pb-8 border-b relative group"
           style={{ borderColor: colors.border }}
         >
+          {onSelectSectionForEdit && (
+            <button
+              type="button"
+              onClick={() => onSelectSectionForEdit('__cover_page__')}
+              className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity absolute top-3 right-3 px-2.5 py-1 rounded border border-[#E5E7EB] bg-white text-[11px] font-medium text-[#2563EB] cursor-pointer font-sans"
+            >
+              Edit cover
+            </button>
+          )}
           <div className="border-l-4 pl-4 space-y-2" style={{ borderColor: colors.accent }}>
             {(courseCode || institution) && (
               <p className="text-xs uppercase tracking-widest" style={{ color: colors.muted }}>
@@ -430,29 +455,40 @@ export const StudioDocumentPreview: React.FC<StudioDocumentPreviewProps> = ({
               className="text-xl sm:text-2xl font-bold leading-snug"
               style={{ color: colors.heading, fontFamily: fonts.headingCss }}
             >
-              {doc.title}
+              {displayTitle}
             </h1>
             <div className="flex flex-wrap gap-x-4 gap-y-1 text-xs pt-1" style={{ color: colors.muted }}>
-              {studentName && <span>{studentName}</span>}
+              {studentName && <span>{studentName}{studentId ? ` (${studentId})` : ''}</span>}
               {faculty && <span>{faculty}</span>}
+              {supervisor && <span>Supervisor: {supervisor}</span>}
               {submissionDate && <span>{submissionDate}</span>}
             </div>
           </div>
         </div>
       ) : layout.coverStyle === 'technical_compact' ? (
         <div
-          className="px-5 pt-6 pb-6 sm:px-10 sm:pt-10 sm:pb-8 border-b"
+          id="studio-preview-cover"
+          className="px-5 pt-6 pb-6 sm:px-10 sm:pt-10 sm:pb-8 border-b relative group"
           style={{ backgroundColor: colors.coverBg, borderColor: colors.border }}
         >
+          {onSelectSectionForEdit && (
+            <button
+              type="button"
+              onClick={() => onSelectSectionForEdit('__cover_page__')}
+              className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity absolute top-3 right-3 px-2.5 py-1 rounded border border-[#E5E7EB] bg-white text-[11px] font-medium text-[#2563EB] cursor-pointer font-sans"
+            >
+              Edit cover
+            </button>
+          )}
           <div className="flex flex-wrap items-center justify-between gap-2 text-xs font-mono mb-2" style={{ color: colors.muted }}>
-            <span>{[courseCode, doc.docType.replace('_', ' ').toUpperCase()].filter(Boolean).join(' · ')}</span>
+            <span>{[courseCode, cover.subtitle || doc.docType.replace('_', ' ').toUpperCase()].filter(Boolean).join(' · ')}</span>
             {submissionDate && <span>{submissionDate}</span>}
           </div>
           <h1
             className="text-xl sm:text-2xl font-bold leading-snug"
             style={{ color: colors.heading, fontFamily: fonts.headingCss }}
           >
-            {doc.title}
+            {displayTitle}
           </h1>
           <div className="mt-3 pt-3 border-t grid grid-cols-1 sm:grid-cols-2 gap-1.5 text-xs" style={{ borderColor: colors.border, color: colors.muted }}>
             {studentName && <span>Author: <strong style={{ color: colors.text }}>{studentName}{studentId ? ` (${studentId})` : ''}</strong></span>}
@@ -463,9 +499,19 @@ export const StudioDocumentPreview: React.FC<StudioDocumentPreviewProps> = ({
         </div>
       ) : layout.coverStyle === 'clean_academic' ? (
         <div
-          className="px-5 pt-7 pb-6 sm:px-10 sm:pt-11 sm:pb-8 border-b"
+          id="studio-preview-cover"
+          className="px-5 pt-7 pb-6 sm:px-10 sm:pt-11 sm:pb-8 border-b relative group"
           style={{ borderColor: colors.border }}
         >
+          {onSelectSectionForEdit && (
+            <button
+              type="button"
+              onClick={() => onSelectSectionForEdit('__cover_page__')}
+              className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity absolute top-3 right-3 px-2.5 py-1 rounded border border-[#E5E7EB] bg-white text-[11px] font-medium text-[#2563EB] cursor-pointer font-sans"
+            >
+              Edit cover
+            </button>
+          )}
           <div className="h-1 w-full mb-5" style={{ backgroundColor: colors.accent }} />
           {(institution || courseCode) && (
             <p className="text-xs font-semibold uppercase tracking-wider mb-1.5" style={{ color: colors.accent }}>
@@ -476,20 +522,31 @@ export const StudioDocumentPreview: React.FC<StudioDocumentPreviewProps> = ({
             className="text-xl sm:text-2xl font-bold leading-snug"
             style={{ color: colors.heading, fontFamily: fonts.headingCss }}
           >
-            {doc.title}
+            {displayTitle}
           </h1>
           <div className="mt-3 flex flex-wrap gap-x-4 gap-y-1 text-xs" style={{ color: colors.muted }}>
-            {studentName && <span>Prepared by <strong style={{ color: colors.text }}>{studentName}</strong></span>}
+            {studentName && <span>Prepared by <strong style={{ color: colors.text }}>{studentName}{studentId ? ` (${studentId})` : ''}</strong></span>}
             {faculty && <span>{faculty}</span>}
+            {supervisor && <span>Supervisor: {supervisor}</span>}
             {submissionDate && <span>{submissionDate}</span>}
           </div>
         </div>
       ) : (
         /* formal_centered (Strict University Standard) */
         <div
-          className="px-5 py-8 sm:px-10 sm:py-12 border-b text-center space-y-2.5"
+          id="studio-preview-cover"
+          className="px-5 py-8 sm:px-10 sm:py-12 border-b text-center space-y-2.5 relative group"
           style={{ borderColor: '#E5E7EB' }}
         >
+          {onSelectSectionForEdit && (
+            <button
+              type="button"
+              onClick={() => onSelectSectionForEdit('__cover_page__')}
+              className="opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity absolute top-3 right-3 px-2.5 py-1 rounded border border-[#E5E7EB] bg-white text-[11px] font-medium text-[#2563EB] cursor-pointer font-sans"
+            >
+              Edit cover
+            </button>
+          )}
           {institution && (
             <p className="text-xs font-bold uppercase tracking-wide" style={{ color: colors.heading }}>
               {institution}
@@ -504,8 +561,11 @@ export const StudioDocumentPreview: React.FC<StudioDocumentPreviewProps> = ({
             className="text-lg sm:text-xl font-bold uppercase leading-snug pt-3 pb-2"
             style={{ color: colors.heading, fontFamily: fonts.headingCss }}
           >
-            {doc.title}
+            {displayTitle}
           </h1>
+          {cover.subtitle && (
+            <p className="text-xs" style={{ color: colors.muted }}>{cover.subtitle}</p>
+          )}
           <div className="text-xs space-y-1 pt-1" style={{ color: colors.text }}>
             {studentName && (
               <p className="font-semibold">
@@ -713,18 +773,27 @@ export const StudioSlideDeckPreview: React.FC<StudioSlideDeckPreviewProps> = ({
 
   const slides: SlideDeckItem[] = useMemo(() => {
     const out: SlideDeckItem[] = [];
+    const slideCover = resolveSlideCoverPage(doc);
     const subtitleParts = [
-      doc.brief?.courseCode || doc.metadata?.courseCode || doc.subject,
-      doc.brief?.studentName || doc.metadata?.studentName,
-      doc.brief?.institution || doc.metadata?.institution,
-      doc.brief?.date || doc.metadata?.submissionDate,
+      slideCover.subtitle,
+      slideCover.courseCode,
+      slideCover.studentName
+        ? slideCover.studentId
+          ? `${slideCover.studentName} (${slideCover.studentId})`
+          : slideCover.studentName
+        : '',
+      slideCover.department,
+      slideCover.institution,
+      slideCover.submissionDate,
     ].filter(Boolean);
 
     out.push({
       id: 'slide-title',
+      sectionId: '__cover_page__',
       kind: 'title',
-      title: doc.title,
+      title: slideCover.title || doc.title,
       subtitle: subtitleParts.join(' · '),
+      speakerNotes: slideCover.speakerNotes || undefined,
       slideNumber: 1,
     });
 
@@ -781,6 +850,21 @@ export const StudioSlideDeckPreview: React.FC<StudioSlideDeckPreviewProps> = ({
     }
   }, [activeSectionId, slides]);
 
+  // ArrowLeft / ArrowRight keyboard navigation in read-only Slide Preview mode
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const tag = (e.target as HTMLElement | null)?.tagName;
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+      if (e.key === 'ArrowRight') {
+        setCurrentSlideIdx((prev) => Math.min(slides.length - 1, prev + 1));
+      } else if (e.key === 'ArrowLeft') {
+        setCurrentSlideIdx((prev) => Math.max(0, prev - 1));
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [slides.length]);
+
   const safeIdx = Math.min(currentSlideIdx, Math.max(0, slides.length - 1));
   const currentSlide = slides[safeIdx] || slides[0];
   const courseCode = doc.brief?.courseCode || doc.metadata?.courseCode || doc.subject || '';
@@ -811,7 +895,94 @@ export const StudioSlideDeckPreview: React.FC<StudioSlideDeckPreviewProps> = ({
           fontFamily: fonts.bodyCss,
         }}
       >
-        {currentSlide.kind === 'title' ? (
+        {template.vectorKind && template.safeZone ? (
+          (() => {
+            const isTitle = currentSlide.kind === 'title';
+            const zone = isTitle ? template.safeZone.title : template.safeZone.content;
+            const isDarkTitle = isTitle && template.vectorKind === 'editorial-split-dark';
+            const titleColor = isDarkTitle ? colors.titleText : colors.heading;
+            const subColor = isDarkTitle ? colors.accentSoft || '#E2E8F0' : colors.muted;
+            const isCenteredTitle = isTitle && template.vectorKind === 'swiss-monochrome';
+            return (
+              <>
+                <SlideVectorBackground template={template} variant={isTitle ? 'title' : 'content'} />
+                <div
+                  className={`absolute z-10 flex flex-col ${
+                    isTitle ? 'justify-center gap-3' : 'justify-start'
+                  } ${isCenteredTitle ? 'items-center text-center' : 'text-left'}`}
+                  style={{
+                    left: `${(zone.x / 13.333) * 100}%`,
+                    top: `${(zone.y / 7.5) * 100}%`,
+                    width: `${(zone.w / 13.333) * 100}%`,
+                    height: `${(zone.h / 7.5) * 100}%`,
+                  }}
+                >
+                  {isTitle ? (
+                    <>
+                      {courseCode && (
+                        <span
+                          className="text-[11px] sm:text-xs font-bold uppercase tracking-widest"
+                          style={{ color: colors.accent }}
+                        >
+                          {courseCode}
+                        </span>
+                      )}
+                      <h1
+                        className="text-lg sm:text-3xl font-bold leading-tight"
+                        style={{ color: titleColor, fontFamily: fonts.headingCss }}
+                      >
+                        {currentSlide.title}
+                      </h1>
+                      {currentSlide.subtitle && (
+                        <p className="text-xs sm:text-sm" style={{ color: subColor }}>
+                          {currentSlide.subtitle}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <div className="flex items-center justify-between gap-3 pb-2 shrink-0">
+                        <h2
+                          className="text-base sm:text-2xl font-bold truncate"
+                          style={{ color: colors.heading, fontFamily: fonts.headingCss }}
+                        >
+                          {currentSlide.title}
+                        </h2>
+                        <span
+                          className="text-[11px] font-mono font-semibold shrink-0"
+                          style={{ color: colors.muted }}
+                        >
+                          {String(currentSlide.slideNumber).padStart(2, '0')}
+                        </span>
+                      </div>
+                      <div className="flex-1 min-h-0 overflow-y-auto pt-1">
+                        {currentSlide.kind === 'visual' && currentSlide.visual ? (
+                          <StudioVisualCard
+                            block={currentSlide.visual}
+                            designStyle={doc.metadata?.visualPreferences?.designStyle}
+                            palette={visualPalette}
+                          />
+                        ) : (
+                          <ul className="space-y-2.5 sm:space-y-3 text-xs sm:text-sm leading-relaxed">
+                            {(currentSlide.bullets || []).map((b, bIdx) => (
+                              <li key={bIdx} className="flex items-start gap-2.5">
+                                <span
+                                  className="w-2 h-2 rounded-xs shrink-0 mt-1.5"
+                                  style={{ backgroundColor: colors.accent }}
+                                />
+                                <span style={{ color: colors.body }}>{b}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
+              </>
+            );
+          })()
+        ) : currentSlide.kind === 'title' ? (
           layout.titleLayout === 'pitch_split_hero' ? (
             <div className="grid grid-cols-12 h-full">
               <div

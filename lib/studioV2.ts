@@ -15,10 +15,72 @@ import {
 } from '../types';
 import { FREE_BETA_LIMITS } from './plans';
 
+/**
+ * Calibrated average academic words per body page (12pt font, 1.5 line spacing, headings/tables).
+ * Used as the single source of truth for translating user-facing Pages to internal AI word budgets.
+ */
+export const WORDS_PER_ACADEMIC_PAGE = 325;
+export const MIN_ACADEMIC_PAGES = 1;
+export const MAX_ACADEMIC_PAGES = 40;
+export const MIN_SLIDES = 3;
+export const MAX_SLIDES = 35;
+
+export function clampAcademicPages(pages: number): number {
+  const num = Number(pages);
+  if (!Number.isFinite(num)) return 5;
+  return Math.min(MAX_ACADEMIC_PAGES, Math.max(MIN_ACADEMIC_PAGES, Math.round(num)));
+}
+
+export function clampSlideCount(slides: number): number {
+  const num = Number(slides);
+  if (!Number.isFinite(num)) return 12;
+  return Math.min(MAX_SLIDES, Math.max(MIN_SLIDES, Math.round(num)));
+}
+
+/**
+ * Converts a user-chosen body page count (clamped to 1..40) to the internal AI word budget.
+ */
+export function pagesToTargetWords(pages: number): number {
+  return Math.round(clampAcademicPages(pages) * WORDS_PER_ACADEMIC_PAGE);
+}
+
+/**
+ * Converts a word count to an estimated academic body page count (minimum 1 page).
+ */
+export function wordsToEstimatedPages(words: number): number {
+  const num = Math.max(0, Number(words) || 0);
+  return Math.max(1, Math.round(num / WORDS_PER_ACADEMIC_PAGE));
+}
+
+/**
+ * Resolves the target body page count for a document, seamlessly supporting legacy documents
+ * that only stored `targetWordCount` without `targetPages`.
+ */
+export function resolveTargetPagesForDoc(
+  doc: Partial<Pick<AcademicDocument, 'targetWordCount' | 'brief' | 'metadata'>>
+): number {
+  const explicitBriefPages = Number(doc.brief?.targetPages);
+  if (Number.isFinite(explicitBriefPages) && explicitBriefPages > 0) {
+    return clampAcademicPages(explicitBriefPages);
+  }
+  const explicitMetaPages = Number(doc.metadata?.targetPages);
+  if (Number.isFinite(explicitMetaPages) && explicitMetaPages > 0) {
+    return clampAcademicPages(explicitMetaPages);
+  }
+  if (doc.brief?.lengthUnit === 'pages' && Number(doc.brief.targetLength) > 0) {
+    return clampAcademicPages(Number(doc.brief.targetLength));
+  }
+  const legacyWords = Number(doc.targetWordCount) || 0;
+  if (legacyWords > 0) {
+    return clampAcademicPages(wordsToEstimatedPages(legacyWords));
+  }
+  return 5;
+}
+
 export const STUDIO_V2_LIMITS = {
   maxActiveJobsPerUser: 1,
   maxGenerationsPerDay: 5,
-  maxTargetWords: 8000,
+  maxTargetWords: MAX_ACADEMIC_PAGES * WORDS_PER_ACADEMIC_PAGE,
   stepLeaseMs: 55_000,
   stepTimeoutMs: 40_000,
   retrieveSourcesTimeoutMs: 22_000,
@@ -1067,11 +1129,12 @@ export function formatQuotaResetLabel(resetAt?: string | null, nowMs = Date.now(
 
 /**
  * Computes consistent document card progress:
- * - Completed documents, documents with all planned sections finalized, or exported documents ALWAYS show 100% + clean word count.
+ * - Completed documents, documents with all planned sections finalized, or exported documents ALWAYS show 100% + clean page/slide count.
  * - Partial percentages are reserved strictly for actively generating or unfinished drafts.
  */
 export function computeDocumentCardProgress(
-  doc: Pick<AcademicDocument, 'status' | 'currentWordCount' | 'targetWordCount' | 'sections' | 'outline' | 'metadata'>,
+  doc: Pick<AcademicDocument, 'status' | 'currentWordCount' | 'targetWordCount' | 'sections' | 'outline' | 'metadata'> &
+    Partial<Pick<AcademicDocument, 'docType' | 'fileFormat' | 'brief'>>,
   hasActiveJob = false
 ): {
   isComplete: boolean;
@@ -1082,6 +1145,12 @@ export function computeDocumentCardProgress(
   const target = Math.max(1, Number(doc.targetWordCount) || 1);
   const sections = Array.isArray(doc.sections) ? doc.sections : [];
   const hasExported = Boolean(doc.metadata?.lastExportedAt);
+  const isSlides =
+    doc.fileFormat === 'pptx' ||
+    doc.docType === 'presentation' ||
+    doc.metadata?.preferredFormat === 'pptx' ||
+    doc.brief?.fileFormat === 'pptx' ||
+    doc.brief?.docType === 'presentation';
 
   // Count non-front-matter writing sections when outline exists, else all sections
   const draftedCount = sections.filter((s) => Boolean(s.content && s.content.trim().length > 0)).length;
@@ -1093,19 +1162,44 @@ export function computeDocumentCardProgress(
     (doc.status === 'completed' || hasExported || allSectionsFinalized);
 
   if (isComplete) {
+    if (isSlides) {
+      const slideCount = Math.max(
+        1,
+        sections.length > 0 ? sections.length + 1 : Number(doc.brief?.targetLength) || 1
+      );
+      return {
+        isComplete: true,
+        percent: 100,
+        wordLabel: `${slideCount} ${slideCount === 1 ? 'slide' : 'slides'} · Ready`,
+      };
+    }
+    const estPages = words > 0 ? wordsToEstimatedPages(words) : resolveTargetPagesForDoc(doc);
     return {
       isComplete: true,
       percent: 100,
-      wordLabel: `${words.toLocaleString()} words · Ready`,
+      wordLabel: `~${estPages} ${estPages === 1 ? 'page' : 'pages'} · Ready`,
     };
   }
 
   const rawPct = Math.round((words / target) * 100);
   const clampedPct = Math.min(99, Math.max(0, rawPct));
+  if (isSlides) {
+    const targetSlides = Math.max(
+      1,
+      sections.length > 0 ? sections.length + 1 : Number(doc.brief?.targetLength) || 12
+    );
+    return {
+      isComplete: false,
+      percent: clampedPct,
+      wordLabel: `${draftedCount} / ${targetSlides} slides`,
+    };
+  }
+  const currentPages = words > 0 ? wordsToEstimatedPages(words) : 0;
+  const targetPages = resolveTargetPagesForDoc(doc);
   return {
     isComplete: false,
     percent: clampedPct,
-    wordLabel: `${words.toLocaleString()} / ${target.toLocaleString()} words`,
+    wordLabel: `~${currentPages} / ${targetPages} ${targetPages === 1 ? 'page' : 'pages'}`,
   };
 }
 
@@ -1162,6 +1256,76 @@ export function selectStudioHomeStatusBar(input: {
   }
 
   return null;
+}
+
+/**
+ * Parses raw AI JSON output for `/api/studio/v2/outline` into normalized StudioOutlineItem[].
+ * Supports `{ outline: [...] }`, `{ sections: [...] }`, markdown-fenced JSON, or a top-level array `[...]`.
+ */
+export function parseStudioOutlineResponse(
+  raw: string,
+  visualsEnabled: boolean
+): StudioOutlineItem[] {
+  const cleanedRaw = String(raw || '')
+    .trim()
+    .replace(/^```(?:json)?\s*/i, '')
+    .replace(/\s*```$/i, '')
+    .trim();
+
+  if (!cleanedRaw) {
+    throw new Error('AI returned an empty outline response. Please try again.');
+  }
+
+  let parsed: any = null;
+  try {
+    parsed = JSON.parse(cleanedRaw);
+  } catch {
+    const startBrace = cleanedRaw.indexOf('{');
+    const endBrace = cleanedRaw.lastIndexOf('}');
+    const startBracket = cleanedRaw.indexOf('[');
+    const endBracket = cleanedRaw.lastIndexOf(']');
+    if (startBrace !== -1 && endBrace > startBrace) {
+      try {
+        parsed = JSON.parse(cleanedRaw.slice(startBrace, endBrace + 1));
+      } catch {
+        // Fall through to array extraction / error
+      }
+    }
+    if (!parsed && startBracket !== -1 && endBracket > startBracket) {
+      try {
+        parsed = JSON.parse(cleanedRaw.slice(startBracket, endBracket + 1));
+      } catch {
+        // Fall through to error
+      }
+    }
+    if (!parsed) {
+      throw new Error('AI returned an incomplete outline (truncated JSON). Please try again.');
+    }
+  }
+
+  const items = Array.isArray(parsed)
+    ? parsed
+    : Array.isArray(parsed?.outline)
+    ? parsed.outline
+    : Array.isArray(parsed?.sections)
+    ? parsed.sections
+    : [];
+
+  if (items.length === 0) {
+    throw new Error('AI returned an empty outline. Please try again.');
+  }
+
+  return items.map((item: any, idx: number) => ({
+    id: String(item?.id || `sec_${idx + 1}`),
+    title: String(item?.title || `Section ${idx + 1}`).trim() || `Section ${idx + 1}`,
+    level: (item?.level === 2 || item?.level === 3 ? item.level : 1) as 1 | 2 | 3,
+    order: idx,
+    kind: item?.kind,
+    description: String(item?.description || '').trim(),
+    targetWords: Math.max(0, Math.round(Number(item?.targetWords) || 0)),
+    plannedVisual: Boolean(visualsEnabled && item?.plannedVisual),
+    approved: true,
+  }));
 }
 
 
